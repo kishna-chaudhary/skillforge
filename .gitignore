@@ -44,3 +44,9 @@ coverage/
 # Temporary files
 *.tmp
 *.temp
+
+# Private employee recordings
+/private-recordings/
+/backend/private-recordings/
+/recordings/
+/backend/recordings/

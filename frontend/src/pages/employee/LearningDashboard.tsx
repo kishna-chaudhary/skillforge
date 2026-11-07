@@ -16,7 +16,9 @@ import {
 } from 'lucide-react'
 
 import {
+  useEffect,
   useMemo,
+  useState,
 } from 'react'
 
 import {
@@ -26,15 +28,25 @@ import {
 import DashboardLayout from '../../layouts/DashboardLayout'
 import { roadmapData } from '../../data/roadmapData'
 
-const lessonStorageKey =
-  'skillforge_completed_lessons'
-
-const topicStorageKey =
-  'skillforge_completed_topics'
-
-interface LessonProgressStorage {
-  [topicKey: string]: number[]
+interface CompletedLesson {
+  roleId: string
+  topicId: string
+  lessonId: number
 }
+
+interface DashboardLessonsResponse {
+  success: boolean
+  completedLessons?: CompletedLesson[]
+}
+
+interface CompletedTopicsResponse {
+  success: boolean
+  completedTopics?: string[]
+}
+
+const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:5000')
+  .replace(/\/$/, '')
+  .replace(/\/api$/, '')
 
 interface DashboardTopic {
   roleId: string
@@ -59,77 +71,65 @@ interface RoleProgress {
   progress: number
 }
 
-function getCompletedLessons(): LessonProgressStorage {
-  const saved =
-    localStorage.getItem(
-      lessonStorageKey
-    )
-
-  if (!saved) {
-    return {}
-  }
-
-  try {
-    const parsed =
-      JSON.parse(saved)
-
-    if (
-      !parsed ||
-      typeof parsed !== 'object' ||
-      Array.isArray(parsed)
-    ) {
-      return {}
-    }
-
-    return parsed as LessonProgressStorage
-  } catch {
-    return {}
-  }
-}
-
-function getCompletedTopics(): string[] {
-  const saved =
-    localStorage.getItem(
-      topicStorageKey
-    )
-
-  if (!saved) {
-    return []
-  }
-
-  try {
-    const parsed =
-      JSON.parse(saved)
-
-    if (!Array.isArray(parsed)) {
-      return []
-    }
-
-    return parsed.filter(
-      (
-        value
-      ): value is string =>
-        typeof value === 'string'
-    )
-  } catch {
-    return []
-  }
-}
-
 function LearningDashboard() {
   const navigate =
     useNavigate()
 
+  const [completedLessons, setCompletedLessons] = useState<CompletedLesson[]>([])
+  const [completedTopics, setCompletedTopics] = useState<string[]>([])
+  const [isProgressLoading, setIsProgressLoading] = useState(true)
+  const [progressError, setProgressError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadProgress() {
+      setIsProgressLoading(true)
+      setProgressError('')
+      try {
+        const token = localStorage.getItem('skillforge-token')
+        if (!token) throw new Error('Please log in again.')
+        const headers = { Authorization: `Bearer ${token}` }
+        const [lessonsResponse, topicsResponse] = await Promise.all([
+          fetch(`${API_BASE}/api/progress/dashboard-lessons`, { headers, cache: 'no-store' }),
+          fetch(`${API_BASE}/api/progress`, { headers, cache: 'no-store' }),
+        ])
+        if (!lessonsResponse.ok || !topicsResponse.ok) {
+          throw new Error('Unable to load your latest learning progress.')
+        }
+        const lessonsData = (await lessonsResponse.json()) as DashboardLessonsResponse
+        const topicsData = (await topicsResponse.json()) as CompletedTopicsResponse
+        if (!lessonsData.success || !topicsData.success ||
+            !Array.isArray(lessonsData.completedLessons) ||
+            !Array.isArray(topicsData.completedTopics)) {
+          throw new Error('The server returned invalid progress data.')
+        }
+        if (cancelled) return
+        setCompletedLessons(lessonsData.completedLessons)
+        setCompletedTopics(topicsData.completedTopics)
+      } catch (error) {
+        if (!cancelled) {
+          setProgressError(error instanceof Error ? error.message : 'Unable to load learning progress.')
+        }
+      } finally {
+        if (!cancelled) setIsProgressLoading(false)
+      }
+    }
+
+    void loadProgress()
+    return () => { cancelled = true }
+  }, [])
+
   const dashboard =
     useMemo(
       () => {
-        const lessonProgress =
-          getCompletedLessons()
-
-        const completedTopics =
-          new Set(
-            getCompletedTopics()
-          )
+        const lessonProgress: Record<string, Set<number>> = {}
+        completedLessons.forEach((lesson) => {
+          const key = `${lesson.roleId}/${lesson.topicId}`
+          if (!lessonProgress[key]) lessonProgress[key] = new Set<number>()
+          lessonProgress[key].add(lesson.lessonId)
+        })
+        const completedTopicSet = new Set(completedTopics)
 
         const topics: DashboardTopic[] =
           []
@@ -152,42 +152,23 @@ function LearningDashboard() {
                 const topicKey =
                   `${roleId}/${topic.id}`
 
-                const savedLessons =
-                  lessonProgress[
-                    topicKey
-                  ]
-
-                const validCompletedLessons =
-                  Array.isArray(
-                    savedLessons
-                  )
-                    ? Array.from(
-                        new Set(
-                          savedLessons.filter(
-                            (
-                              value
-                            ): value is number =>
-                              typeof value ===
-                                'number' &&
-                              value >= 0 &&
-                              value <
-                                topic.lessons
-                          )
-                        )
-                      )
-                    : []
+                // The API returns database lesson IDs, not lesson indexes.
+                const completedCount = Math.min(
+                  lessonProgress[topicKey]?.size ?? 0,
+                  topic.lessons
+                )
 
                 completedLessonCount +=
-                  validCompletedLessons.length
+                  completedCount
 
                 const isTopicCompleted =
-                  completedTopics.has(
+                  completedTopicSet.has(
                     topicKey
                   )
 
                 const areLessonsComplete =
                   topic.lessons > 0 &&
-                  validCompletedLessons.length ===
+                  completedCount ===
                     topic.lessons
 
                 topics.push({
@@ -203,12 +184,12 @@ function LearningDashboard() {
                   totalLessons:
                     topic.lessons,
                   completedLessons:
-                    validCompletedLessons.length,
+                    completedCount,
                   lessonProgress:
                     topic.lessons > 0
                       ? Math.round(
                           (
-                            validCompletedLessons.length /
+                            completedCount /
                             topic.lessons
                           ) *
                             100
@@ -371,7 +352,7 @@ function LearningDashboard() {
               : 0,
         }
       },
-      []
+      [completedLessons, completedTopics]
     )
 
   const primaryTopic =
@@ -400,6 +381,22 @@ function LearningDashboard() {
         `/employee/roles/${primaryTopic.roleId}/topics/${primaryTopic.topicId}`
       )
     }
+
+  if (isProgressLoading) {
+    return (
+      <DashboardLayout>
+        <div className="p-8 text-center text-slate-600">Loading your latest learning progress...</div>
+      </DashboardLayout>
+    )
+  }
+
+  if (progressError) {
+    return (
+      <DashboardLayout>
+        <div className="p-8 text-center text-red-600">{progressError}</div>
+      </DashboardLayout>
+    )
+  }
 
   return (
     <DashboardLayout>

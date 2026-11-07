@@ -1,5 +1,4 @@
 import {
-  BrowserRouter,
   Navigate,
   Route,
   Routes,
@@ -25,6 +24,7 @@ import Certificates from '../pages/employee/Certificates'
 import Profile from '../pages/employee/Profile'
 import Notifications from '../pages/employee/Notifications'
 import Progress from '../pages/employee/Progress'
+import FinalPracticalChallenge from '../pages/employee/FinalPracticalChallenge'
 
 // ==================================================
 // ADMIN
@@ -43,6 +43,9 @@ import AdminLiveSessions from '../pages/admin/AdminLiveSessions'
 import CreateLiveSession from '../pages/admin/CreateLiveSession'
 import AdminProgressAnalytics from '../pages/admin/AdminProgressAnalytics'
 import AdminCertificates from '../pages/admin/AdminCertificates'
+import PracticalChallenges from '../pages/admin/PracticalChallenges'
+import PracticalChallengeEditor from '../pages/admin/PracticalChallengeEditor'
+import QuizRecordings from '../pages/admin/QuizRecordings'
 
 // ==================================================
 // OLD ADMIN PAGES
@@ -63,7 +66,7 @@ import QuizBuilder from '../pages/admin/QuizBuilder'
 
 function AppRoutes() {
   return (
-    <BrowserRouter>
+    
       <Routes>
 
         {/* ==================================================
@@ -176,6 +179,15 @@ function AppRoutes() {
           }
         />
 
+        <Route
+          path="/admin/live-sessions/room"
+          element={
+            <ProtectedRoute requiredRole="admin">
+              <LiveSessionRoom />
+            </ProtectedRoute>
+          }
+        />
+
         {/* Old live-session URLs */}
 
         <Route
@@ -258,6 +270,24 @@ function AppRoutes() {
           }
         />
 
+        <Route
+          path="/employee/practical-challenge/:roleId"
+          element={
+           <ProtectedRoute requiredRole="employee">
+              <FinalPracticalChallenge />
+           </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/admin/practical-challenges/:roleId"
+          element={
+            <ProtectedRoute requiredRole="admin">
+              <PracticalChallengeEditor />
+            </ProtectedRoute>
+          }
+        />
+
         {/* ==================================================
             ADMIN DASHBOARD
         ================================================== */}
@@ -333,6 +363,15 @@ function AppRoutes() {
           }
         />
 
+        <Route
+          path="/admin/practical-challenges"
+          element={
+           <ProtectedRoute requiredRole="admin">
+             <PracticalChallenges />
+           </ProtectedRoute>
+          }
+        />
+
 
         <Route
          path="/admin/roles/:roleId/topics/:topicId/assessment"
@@ -384,6 +423,15 @@ function AppRoutes() {
            <ProtectedRoute requiredRole="admin">
             <AssessmentsOverview />
             </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/admin/quiz-recordings"
+          element={
+            <ProtectedRoute requiredRole="admin">
+             <QuizRecordings />
+           </ProtectedRoute>
           }
         />
 
@@ -538,7 +586,7 @@ function AppRoutes() {
         />
 
       </Routes>
-    </BrowserRouter>
+   
   )
 }
 

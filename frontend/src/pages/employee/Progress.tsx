@@ -9,20 +9,32 @@ import {
   TrendingUp,
 } from 'lucide-react'
 
+import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import DashboardLayout from '../../layouts/DashboardLayout'
 import { roadmapData } from '../../data/roadmapData'
 
-const lessonStorageKey =
-  'skillforge_completed_lessons'
-
-const topicStorageKey =
-  'skillforge_completed_topics'
-
-interface CompletedLessons {
-  [key: string]: number[]
+interface CompletedLessonRecord {
+  roleId: string
+  topicId: string
+  lessonId: number
 }
+
+interface DashboardLessonsResponse {
+  success: boolean
+  completedLessons?: CompletedLessonRecord[]
+}
+
+interface CompletedTopicsResponse {
+  success: boolean
+  completedTopics?: string[]
+}
+
+const API_BASE = (
+  import.meta.env.VITE_API_URL || 'http://localhost:5000'
+).replace(/\/$/, '').replace(/\/api$/, '')
 
 interface RoleProgress {
   roleId: string
@@ -37,69 +49,82 @@ interface RoleProgress {
 
 function Progress() {
   const navigate = useNavigate()
+  const [completedLessons, setCompletedLessons] =
+    useState<CompletedLessonRecord[]>([])
+  const [completedTopics, setCompletedTopics] = useState<string[]>([])
+  const [loading, setLoading] = useState(true)
+  const [errorMessage, setErrorMessage] = useState('')
 
-  // ==================================================
-  // READ LESSON PROGRESS
-  // ==================================================
+  useEffect(() => {
+    let cancelled = false
 
-  let completedLessons: CompletedLessons = {}
+    const loadProgress = async () => {
+      setLoading(true)
+      setErrorMessage('')
 
-  try {
-    const storedLessons =
-      localStorage.getItem(
-        lessonStorageKey
-      )
+      try {
+        const token = localStorage.getItem('skillforge-token')
+        if (!token) throw new Error('Please log in again.')
 
-    if (storedLessons) {
-      const parsed =
-        JSON.parse(storedLessons)
+        const headers = { Authorization: `Bearer ${token}` }
+        const [lessonsResponse, topicsResponse] = await Promise.all([
+          fetch(`${API_BASE}/api/progress/dashboard-lessons`, { headers }),
+          fetch(`${API_BASE}/api/progress`, { headers }),
+        ])
 
-      if (
-        parsed &&
-        typeof parsed === 'object' &&
-        !Array.isArray(parsed)
-      ) {
-        completedLessons =
-          parsed as CompletedLessons
-      }
-    }
-  } catch {
-    completedLessons = {}
-  }
+        if (!lessonsResponse.ok || !topicsResponse.ok) {
+          throw new Error('Unable to load your latest learning progress.')
+        }
 
-  // ==================================================
-  // READ COMPLETED TOPICS
-  // ==================================================
+        const lessonsData =
+          (await lessonsResponse.json()) as DashboardLessonsResponse
+        const topicsData =
+          (await topicsResponse.json()) as CompletedTopicsResponse
 
-  let completedTopics: string[] = []
+        if (
+          !lessonsData.success ||
+          !topicsData.success ||
+          !Array.isArray(lessonsData.completedLessons) ||
+          !Array.isArray(topicsData.completedTopics)
+        ) {
+          throw new Error('The server returned invalid progress data.')
+        }
 
-  try {
-    const storedTopics =
-      localStorage.getItem(
-        topicStorageKey
-      )
-
-    if (storedTopics) {
-      const parsed =
-        JSON.parse(storedTopics)
-
-      if (Array.isArray(parsed)) {
-        completedTopics =
-          parsed.filter(
-            (
-              item
-            ): item is string =>
-              typeof item ===
-              'string'
+        if (!cancelled) {
+          setCompletedLessons(lessonsData.completedLessons)
+          setCompletedTopics(topicsData.completedTopics)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : 'Unable to load learning progress.'
           )
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
       }
     }
-  } catch {
-    completedTopics = []
-  }
 
-  const completedTopicSet =
-    new Set(completedTopics)
+    void loadProgress()
+    return () => { cancelled = true }
+  }, [])
+
+  const completedLessonCounts = useMemo(() => {
+    const counts: Record<string, Set<number>> = {}
+    completedLessons.forEach(({ roleId, topicId, lessonId }) => {
+      const key = `${roleId}/${topicId}`
+      if (!counts[key]) counts[key] = new Set<number>()
+      counts[key].add(lessonId)
+    })
+    return counts
+  }, [completedLessons])
+
+  const completedTopicSet = useMemo(
+    () => new Set(completedTopics),
+    [completedTopics]
+  )
 
   // ==================================================
   // CALCULATE ROLE PROGRESS
@@ -123,26 +148,12 @@ function Progress() {
             totalLessons +=
               topic.lessons
 
-            const stored =
-              completedLessons[
-                topicKey
-              ] || []
+            const completedCount = Math.min(
+              completedLessonCounts[topicKey]?.size ?? 0,
+              topic.lessons
+            )
 
-            const uniqueCompleted =
-              new Set(
-                stored.filter(
-                  (lessonIndex) =>
-                    Number.isInteger(
-                      lessonIndex
-                    ) &&
-                    lessonIndex >= 0 &&
-                    lessonIndex <
-                      topic.lessons
-                )
-              )
-
-            completedLessonCount +=
-              uniqueCompleted.size
+            completedLessonCount += completedCount
 
             const isCompleted =
               completedTopicSet.has(
@@ -154,7 +165,8 @@ function Progress() {
             }
 
             const allLessonsComplete =
-              uniqueCompleted.size >=
+              topic.lessons > 0 &&
+              completedCount >=
               topic.lessons
 
             if (
@@ -295,26 +307,14 @@ function Progress() {
             const topicKey =
               `${roleId}/${topic.id}`
 
-            const stored =
-              completedLessons[
-                topicKey
-              ] || []
-
-            const uniqueCompleted =
-              new Set(
-                stored.filter(
-                  (lessonIndex) =>
-                    Number.isInteger(
-                      lessonIndex
-                    ) &&
-                    lessonIndex >= 0 &&
-                    lessonIndex <
-                      topic.lessons
-                )
-              )
+            const completedCount = Math.min(
+              completedLessonCounts[topicKey]?.size ?? 0,
+              topic.lessons
+            )
 
             return (
-              uniqueCompleted.size >=
+              topic.lessons > 0 &&
+              completedCount >=
                 topic.lessons &&
               !completedTopicSet.has(
                 topicKey
@@ -331,6 +331,16 @@ function Progress() {
               topic.title,
           }))
     )
+
+  if (loading || errorMessage) {
+    return (
+      <DashboardLayout>
+        <div className={`p-8 text-center ${errorMessage ? 'text-red-600' : 'text-slate-600'}`}>
+          {errorMessage || 'Loading your latest learning progress...'}
+        </div>
+      </DashboardLayout>
+    )
+  }
 
   return (
     <DashboardLayout>
@@ -764,7 +774,7 @@ function Progress() {
 // ==================================================
 
 interface StatCardProps {
-  icon: React.ReactNode
+  icon: ReactNode
   value: string
   label: string
   description: string

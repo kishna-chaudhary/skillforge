@@ -1,0 +1,6 @@
+ALTER TABLE lessons
+ADD COLUMN IF NOT EXISTS description TEXT;
+
+ALTER TABLE lessons
+ADD COLUMN IF NOT EXISTS resources JSONB
+NOT NULL DEFAULT '[]'::jsonb;

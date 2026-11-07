@@ -14,6 +14,8 @@ import {
   Video,
 } from 'lucide-react'
 
+import { QuizRecordingSession } from '../../utils/quizRecording'
+
 import {
   useEffect,
   useMemo,
@@ -27,13 +29,6 @@ import {
 } from 'react-router-dom'
 
 import DashboardLayout from '../../layouts/DashboardLayout'
-import { roadmapData } from '../../data/roadmapData'
-import { topicQuizData } from '../../data/topicQuizData'
-
-const lessonStorageKey =
-  'skillforge_completed_lessons'
-
-const QUIZ_DURATION_SECONDS = 10 * 60
 
 interface IntegrityEvent {
   id: number
@@ -42,6 +37,70 @@ interface IntegrityEvent {
     | 'screen-share-stopped'
   message: string
   time: string
+}
+
+interface AssessmentOption {
+  id: string
+  text: string
+  position: number
+}
+
+interface AssessmentQuestion {
+  id: string
+  question: string
+  position: number
+  options: AssessmentOption[]
+}
+
+interface AssessmentData {
+  id: string
+  title: string
+  description: string | null
+  passingScore: number
+  durationMinutes: number
+  questions: AssessmentQuestion[]
+}
+
+interface AssessmentApiResponse {
+  success: boolean
+
+  role: {
+    id: string
+    slug: string
+    title: string
+  }
+
+  topic: {
+    id: string
+    slug: string
+    title: string
+    lessonCount: number
+  }
+
+  assessment: AssessmentData
+}
+
+interface AssessmentSubmitResponse {
+  success: boolean
+
+  result: {
+    attemptId: string
+    score: number
+    correctAnswers: number
+    totalQuestions: number
+    passingScore: number
+    passed: boolean
+    integrityEventCount: number
+    submittedAt: string
+  }
+
+  message?: string
+}
+
+interface LessonProgressResponse {
+  success: boolean
+  completedLessons?: number[]
+  message?: string
 }
 
 function shuffleArray<T>(
@@ -74,78 +133,308 @@ function shuffleArray<T>(
 }
 
 function Quiz() {
-  const navigate = useNavigate()
+  const navigate =
+    useNavigate()
 
   const {
     roleId,
     topicId,
   } = useParams()
 
-  const topicKey =
-    roleId && topicId
-      ? `${roleId}/${topicId}`
-      : ''
+  // ==================================================
+  // ASSESSMENT DATA
+  // ==================================================
 
-  const quiz =
-    topicKey
-      ? topicQuizData[topicKey]
-      : undefined
+  const [
+    assessmentData,
+    setAssessmentData,
+  ] =
+    useState<AssessmentApiResponse | null>(
+      null
+    )
 
-  const attemptQuestions =
-  useMemo(() => {
-    if (!quiz) {
-      return []
+  const [
+    isLoadingAssessment,
+    setIsLoadingAssessment,
+  ] = useState(true)
+
+  const [
+    assessmentLoadError,
+    setAssessmentLoadError,
+  ] = useState('')
+
+  useEffect(() => {
+    if (!roleId || !topicId) {
+      setIsLoadingAssessment(false)
+      return
     }
 
-    return shuffleArray(
-      quiz.questions
-    ).map(
-      (question) => {
-        const options =
-          question.options.map(
-            (
-              option,
-              originalIndex
-            ) => ({
-              option,
-              isCorrect:
-                originalIndex ===
-                question.correctAnswer,
-            })
+    let cancelled = false
+
+    const loadAssessment =
+      async () => {
+        setIsLoadingAssessment(
+          true
+        )
+
+        setAssessmentLoadError(
+          ''
+        )
+
+        try {
+          const token =
+            localStorage.getItem(
+              'skillforge-token'
+            )
+
+          if (!token) {
+            throw new Error(
+              'Authentication required.'
+            )
+          }
+
+          const response =
+            await fetch(
+              `http://localhost:5000/api/assessments/${encodeURIComponent(
+                roleId
+              )}/topics/${encodeURIComponent(
+                topicId
+              )}`,
+              {
+                headers: {
+                  Authorization:
+                    `Bearer ${token}`,
+                },
+              }
+            )
+
+          const data =
+            await response.json()
+
+          if (!response.ok) {
+            throw new Error(
+              data.message ||
+                'Failed to load assessment.'
+            )
+          }
+
+          if (!cancelled) {
+            setAssessmentData(
+              data as AssessmentApiResponse
+            )
+          }
+        } catch (error) {
+          if (!cancelled) {
+            setAssessmentLoadError(
+              error instanceof Error
+                ? error.message
+                : 'Failed to load assessment.'
+            )
+          }
+        } finally {
+          if (!cancelled) {
+            setIsLoadingAssessment(
+              false
+            )
+          }
+        }
+      }
+
+    void loadAssessment()
+
+    return () => {
+      cancelled = true
+    }
+  }, [roleId, topicId])
+
+  const quiz =
+    assessmentData?.assessment
+
+  const role =
+    assessmentData?.role
+
+  const topic =
+    assessmentData?.topic
+
+  // ==================================================
+  // LESSON PROGRESS FROM POSTGRESQL
+  // ==================================================
+
+  const [
+    completedLessons,
+    setCompletedLessons,
+  ] = useState<number[]>([])
+
+  const [
+    isLoadingProgress,
+    setIsLoadingProgress,
+  ] = useState(true)
+
+  const [
+    progressLoadError,
+    setProgressLoadError,
+  ] = useState('')
+
+  useEffect(() => {
+    if (!roleId || !topicId) {
+      setCompletedLessons([])
+      setIsLoadingProgress(false)
+      return
+    }
+
+    let cancelled = false
+
+    const loadLessonProgress =
+      async () => {
+        setIsLoadingProgress(
+          true
+        )
+
+        setProgressLoadError(
+          ''
+        )
+
+        try {
+          const token =
+            localStorage.getItem(
+              'skillforge-token'
+            )
+
+          if (!token) {
+            throw new Error(
+              'Authentication required.'
+            )
+          }
+
+          const response =
+            await fetch(
+              `http://localhost:5000/api/progress/lessons/${encodeURIComponent(
+                roleId
+              )}/${encodeURIComponent(
+                topicId
+              )}`,
+              {
+                headers: {
+                  Authorization:
+                    `Bearer ${token}`,
+                },
+              }
+            )
+
+          const data =
+            (await response.json()) as LessonProgressResponse
+
+          if (!response.ok) {
+            throw new Error(
+              data.message ||
+                'Failed to load lesson progress.'
+            )
+          }
+
+          if (cancelled) {
+            return
+          }
+
+          const lessons =
+            Array.isArray(
+              data.completedLessons
+            )
+              ? data.completedLessons.filter(
+                  (
+                    value
+                  ): value is number =>
+                    typeof value ===
+                      'number' &&
+                    Number.isInteger(
+                      value
+                    )
+                )
+              : []
+
+          setCompletedLessons(
+            lessons
           )
+        } catch (error) {
+          if (!cancelled) {
+            setCompletedLessons(
+              []
+            )
 
-        const shuffledOptions =
-          shuffleArray(options)
+            setProgressLoadError(
+              error instanceof Error
+                ? error.message
+                : 'Failed to load lesson progress.'
+            )
+          }
+        } finally {
+          if (!cancelled) {
+            setIsLoadingProgress(
+              false
+            )
+          }
+        }
+      }
 
-        return {
+    void loadLessonProgress()
+
+    return () => {
+      cancelled = true
+    }
+  }, [roleId, topicId])
+
+  const requiredLessons =
+    topic?.lessonCount ?? 0
+
+  const validCompletedLessons =
+  useMemo(() => {
+    const uniqueLessons =
+      new Set(
+        completedLessons.filter(
+          (lessonId) =>
+            Number.isInteger(
+              lessonId
+            ) &&
+            lessonId > 0
+        )
+      )
+
+    return Array.from(
+      uniqueLessons
+    )
+  }, [
+    completedLessons,
+  ])
+
+
+
+  const isQuizUnlocked =
+    requiredLessons > 0 &&
+    validCompletedLessons.length ===
+      requiredLessons
+
+  // ==================================================
+  // SHUFFLED QUESTIONS
+  // ==================================================
+
+  const attemptQuestions =
+    useMemo(() => {
+      if (!quiz) {
+        return []
+      }
+
+      return shuffleArray(
+        quiz.questions
+      ).map(
+        (question) => ({
           ...question,
 
           options:
-            shuffledOptions.map(
-              (item) =>
-                item.option
+            shuffleArray(
+              question.options
             ),
-
-          correctAnswer:
-            shuffledOptions.findIndex(
-              (item) =>
-                item.isCorrect
-            ),
-        }
-      }
-    )
-  }, [quiz])
-
-  const role =
-    roleId
-      ? roadmapData[roleId]
-      : undefined
-
-  const topic =
-    role?.topics.find(
-      (item) =>
-        item.id === topicId
-    )
+        })
+      )
+    }, [quiz])
 
   // ==================================================
   // MEDIA REFERENCES
@@ -166,92 +455,19 @@ function Quiz() {
       null
     )
 
+  const recordingSessionRef =
+  useRef<QuizRecordingSession | null>(null)
+
+const recordingStartingRef = useRef(false)
+
+const [recordingStarting, setRecordingStarting] =
+  useState(false)
+
+const [recordingError, setRecordingError] =
+  useState('')
+
   const hasSubmittedRef =
     useRef(false)
-
-  // ==================================================
-  // LOAD COMPLETED LESSONS
-  // ==================================================
-
-  const completedLessons =
-    useMemo(() => {
-      if (!topicKey) {
-        return []
-      }
-
-      const saved =
-        localStorage.getItem(
-          lessonStorageKey
-        )
-
-      if (!saved) {
-        return []
-      }
-
-      try {
-        const parsed =
-          JSON.parse(saved)
-
-        if (
-          parsed &&
-          typeof parsed ===
-            'object' &&
-          !Array.isArray(parsed)
-        ) {
-          const savedLessons =
-            parsed[topicKey]
-
-          if (
-            Array.isArray(
-              savedLessons
-            )
-          ) {
-            return savedLessons.filter(
-              (
-                value
-              ): value is number =>
-                typeof value ===
-                  'number'
-            )
-          }
-        }
-      } catch {
-        return []
-      }
-
-      return []
-    }, [topicKey])
-
-  const requiredLessons =
-    topic?.lessons ?? 0
-
-  const validCompletedLessons =
-    useMemo(() => {
-      const uniqueLessons =
-        new Set(
-          completedLessons.filter(
-            (index) =>
-              Number.isInteger(
-                index
-              ) &&
-              index >= 0 &&
-              index <
-                requiredLessons
-          )
-        )
-
-      return Array.from(
-        uniqueLessons
-      )
-    }, [
-      completedLessons,
-      requiredLessons,
-    ])
-
-  const isQuizUnlocked =
-    requiredLessons > 0 &&
-    validCompletedLessons.length ===
-      requiredLessons
 
   // ==================================================
   // ASSESSMENT STATE
@@ -292,19 +508,51 @@ function Quiz() {
   const [
     remainingSeconds,
     setRemainingSeconds,
-  ] = useState(
-    QUIZ_DURATION_SECONDS
-  )
+  ] = useState(0)
 
   const [
     integrityEvents,
     setIntegrityEvents,
-  ] = useState<
-    IntegrityEvent[]
-  >([])
+  ] =
+    useState<IntegrityEvent[]>(
+      []
+    )
+
+  const [
+    isSubmitting,
+    setIsSubmitting,
+  ] = useState(false)
+
+  const [
+    submitError,
+    setSubmitError,
+  ] = useState('')
+
+  const [
+    startedAt,
+    setStartedAt,
+  ] =
+    useState<string | null>(
+      null
+    )
+
+  useEffect(() => {
+    if (
+      quiz &&
+      !assessmentStarted
+    ) {
+      setRemainingSeconds(
+        quiz.durationMinutes *
+          60
+      )
+    }
+  }, [
+    quiz,
+    assessmentStarted,
+  ])
 
   // ==================================================
-  // CLEAN UP MEDIA
+  // MEDIA CLEANUP
   // ==================================================
 
   const stopMedia = () => {
@@ -369,6 +617,31 @@ function Quiz() {
         )
       }
     }
+
+  // ==================================================
+  // INTEGRITY EVENTS
+  // ==================================================
+
+  const addIntegrityEvent = (
+    type:
+      IntegrityEvent['type'],
+    message: string
+  ) => {
+    setIntegrityEvents(
+      (previous) => [
+        ...previous,
+        {
+          id:
+            Date.now() +
+            Math.random(),
+          type,
+          message,
+          time:
+            new Date().toLocaleTimeString(),
+        },
+      ]
+    )
+  }
 
   // ==================================================
   // SCREEN SHARE
@@ -440,29 +713,8 @@ function Quiz() {
   ])
 
   // ==================================================
-  // INTEGRITY EVENTS
+  // TAB MONITORING
   // ==================================================
-
-  const addIntegrityEvent = (
-    type:
-      IntegrityEvent['type'],
-    message: string
-  ) => {
-    setIntegrityEvents(
-      (previous) => [
-        ...previous,
-        {
-          id:
-            Date.now() +
-            Math.random(),
-          type,
-          message,
-          time:
-            new Date().toLocaleTimeString(),
-        },
-      ]
-    )
-  }
 
   useEffect(() => {
     if (!assessmentStarted) {
@@ -499,83 +751,238 @@ function Quiz() {
   // START ASSESSMENT
   // ==================================================
 
-  const startAssessment = () => {
-    if (
-      !cameraEnabled ||
-      !screenEnabled
-    ) {
-      setMediaError(
-        'Enable both camera and screen sharing before starting the assessment.'
-      )
+ const startAssessment = async () => {
+  if (recordingStartingRef.current) return
 
-      return
-    }
+  if (!cameraEnabled || !screenEnabled) {
+    setMediaError(
+      'Enable both camera and screen sharing before starting.'
+    )
+    return
+  }
 
-    setMediaError('')
+  const cameraStream = cameraStreamRef.current
+  const screenStream = screenStreamRef.current
+
+  if (
+    !cameraStream?.getVideoTracks().some(
+      (track) => track.readyState === 'live'
+    ) ||
+    !screenStream?.getVideoTracks().some(
+      (track) => track.readyState === 'live'
+    )
+  ) {
+    setMediaError(
+      'Camera and screen sharing must remain active.'
+    )
+    return
+  }
+
+  if (
+    !assessmentData?.role?.slug ||
+    !assessmentData?.topic?.slug
+  ) {
+    setMediaError('Assessment information is missing.')
+    return
+  }
+
+  recordingStartingRef.current = true
+  setRecordingStarting(true)
+  setMediaError('')
+  setRecordingError('')
+
+  try {
+    const session = await QuizRecordingSession.start({
+      roleSlug: assessmentData.role.slug,
+      topicSlug: assessmentData.topic.slug,
+      cameraStream,
+      screenStream,
+    })
+
+    recordingSessionRef.current = session
+
+    setStartedAt(new Date().toISOString())
     setAssessmentStarted(true)
+  } catch (error) {
+    setMediaError(
+      error instanceof Error
+        ? error.message
+        : 'Unable to start recording.'
+    )
+  } finally {
+    recordingStartingRef.current = false
+    setRecordingStarting(false)
   }
+}
 
   // ==================================================
-  // SUBMIT
+  // SUBMIT ASSESSMENT
   // ==================================================
 
-  const submitQuiz = () => {
-    if (
-      !quiz ||
-      !roleId ||
-      !topicId ||
-      hasSubmittedRef.current
-    ) {
-      return
-    }
+  const submitQuiz =
+    async () => {
+      if (
+        !quiz ||
+        !roleId ||
+        !topicId ||
+        hasSubmittedRef.current ||
+        isSubmitting
+      ) {
+        return
+      }
 
-    hasSubmittedRef.current =
-      true
+      setIsSubmitting(true)
+      setSubmitError('')
 
-    let correctAnswers = 0
+      try {
+        const token =
+          localStorage.getItem(
+            'skillforge-token'
+          )
 
-    attemptQuestions.forEach(
-      (
-        quizQuestion,
-        index
-      ) => {
-        if (
-          answers[index] ===
-          quizQuestion.correctAnswer
-        ) {
-          correctAnswers += 1
+        if (!token) {
+          throw new Error(
+            'Authentication required.'
+          )
         }
+
+        const submittedAnswers =
+          attemptQuestions.map(
+            (
+              question,
+              index
+            ) => {
+              const selectedIndex =
+                answers[index]
+
+              return {
+                questionId:
+                  question.id,
+
+                selectedOptionId:
+                  selectedIndex ===
+                  undefined
+                    ? null
+                    : question
+                        .options[
+                        selectedIndex
+                      ].id,
+              }
+            }
+          )
+
+        const response =
+          await fetch(
+            `http://localhost:5000/api/assessments/${encodeURIComponent(
+              roleId
+            )}/topics/${encodeURIComponent(
+              topicId
+            )}/submit`,
+            {
+              method: 'POST',
+
+              headers: {
+                'Content-Type':
+                  'application/json',
+
+                Authorization:
+                  `Bearer ${token}`,
+              },
+
+              body: JSON.stringify(
+                {
+                  answers:
+                    submittedAnswers,
+
+                  integrityEventCount:
+                    integrityEvents.length,
+
+                  startedAt,
+                }
+              ),
+            }
+          )
+
+        const data =
+          (await response.json()) as AssessmentSubmitResponse
+
+        if (!response.ok) {
+          throw new Error(
+            data.message ||
+              'Failed to submit assessment.'
+          )
+        }
+
+        hasSubmittedRef.current = true
+
+        const session = recordingSessionRef.current
+
+        if (session) {
+          try {
+            await session.finish()
+          } catch (error) {
+            console.error('Recording finalization failed:', error)
+
+            setRecordingError(
+              'The quiz was submitted, but one or more recordings could not be fully uploaded.'
+            )
+          }
+
+          try {
+           await session.linkAttempt(String(data.result.attemptId))
+          } catch (error) {
+            console.error('Recording linking failed:', error)
+
+            setRecordingError(
+              'The quiz was submitted, but its recording could not be linked to the attempt.'
+            )
+          }
+        }
+
+        stopMedia()
+
+        navigate(
+          `/employee/roles/${roleId}/topics/${topicId}/quiz/result`,
+          {
+            state: {
+              score:
+                data.result.score,
+
+              correctAnswers:
+                data.result
+                  .correctAnswers,
+
+              totalQuestions:
+                data.result
+                  .totalQuestions,
+
+              passingScore:
+                data.result
+                  .passingScore,
+
+              passed:
+                data.result.passed,
+
+              attemptId:
+                data.result
+                  .attemptId,
+
+              integrityEvents:
+                data.result
+                  .integrityEventCount,
+            },
+          }
+        )
+      } catch (error) {
+        setSubmitError(
+          error instanceof Error
+            ? error.message
+            : 'Failed to submit assessment.'
+        )
+      } finally {
+        setIsSubmitting(false)
       }
-    )
-
-    const score =
-      Math.round(
-        (
-          correctAnswers /
-          attemptQuestions.length
-        ) *
-          100
-      )
-
-    stopMedia()
-
-    navigate(
-      `/employee/roles/${roleId}/topics/${topicId}/quiz/result`,
-      {
-        state: {
-          score,
-          correctAnswers,
-          totalQuestions:
-            quiz.questions.length,
-          passingScore:
-            quiz.passingScore,
-
-          integrityEvents:
-            integrityEvents.length,
-        },
-      }
-    )
-  }
+    }
 
   // ==================================================
   // TIMER
@@ -602,17 +1009,16 @@ function Quiz() {
                 )
 
                 window.setTimeout(
-                  () =>
-                    submitQuiz(),
+                  () => {
+                    void submitQuiz()
+                  },
                   0
                 )
 
                 return 0
               }
 
-              return (
-                previous - 1
-              )
+              return previous - 1
             }
           )
         },
@@ -627,7 +1033,27 @@ function Quiz() {
   }, [assessmentStarted])
 
   // ==================================================
-  // INVALID QUIZ
+  // LOADING ASSESSMENT
+  // ==================================================
+
+  if (isLoadingAssessment) {
+    return (
+      <DashboardLayout>
+        <div className="min-h-screen bg-slate-50 p-6">
+          <div className="mx-auto max-w-4xl">
+            <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+              <p className="text-sm font-medium text-slate-500">
+                Loading assessment...
+              </p>
+            </div>
+          </div>
+        </div>
+      </DashboardLayout>
+    )
+  }
+
+  // ==================================================
+  // INVALID ASSESSMENT
   // ==================================================
 
   if (
@@ -639,49 +1065,94 @@ function Quiz() {
   ) {
     return (
       <DashboardLayout>
-
         <div className="min-h-screen bg-slate-50 p-6">
-
           <div className="mx-auto max-w-4xl">
-
             <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-
               <h1 className="text-2xl font-bold text-slate-900">
-                Assessment Not Found
+                Assessment Not
+                Found
               </h1>
 
               <p className="mt-2 text-sm text-slate-500">
-                This topic does not
-                have an assessment
-                available yet.
+                {assessmentLoadError ||
+                  'This topic does not have an assessment available yet.'}
               </p>
-
             </div>
-
           </div>
-
         </div>
-
       </DashboardLayout>
     )
   }
 
   // ==================================================
-  // LOCKED
+  // CHECKING LESSON PROGRESS
+  // ==================================================
+
+  if (isLoadingProgress) {
+    return (
+      <DashboardLayout>
+        <div className="min-h-screen bg-slate-50 p-6">
+          <div className="mx-auto max-w-4xl">
+            <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+              <p className="text-sm font-medium text-slate-500">
+                Checking lesson
+                progress...
+              </p>
+            </div>
+          </div>
+        </div>
+      </DashboardLayout>
+    )
+  }
+
+  if (progressLoadError) {
+    return (
+      <DashboardLayout>
+        <div className="min-h-screen bg-slate-50 p-6">
+          <div className="mx-auto max-w-4xl">
+            <div className="rounded-2xl border border-red-200 bg-white p-8 text-center shadow-sm">
+              <h1 className="text-xl font-bold text-slate-900">
+                Unable to Check
+                Lesson Progress
+              </h1>
+
+              <p className="mt-2 text-sm text-red-600">
+                {progressLoadError}
+              </p>
+
+              <button
+                onClick={() =>
+                  navigate(
+                    `/employee/roles/${roleId}/topics/${topicId}`
+                  )
+                }
+                className="mt-6 rounded-xl bg-purple-600 px-5 py-3 text-sm font-semibold text-white hover:bg-purple-700"
+              >
+                Back to Topic
+              </button>
+            </div>
+          </div>
+        </div>
+      </DashboardLayout>
+    )
+  }
+
+  // ==================================================
+  // LOCKED ASSESSMENT
   // ==================================================
 
   if (!isQuizUnlocked) {
     const remaining =
-      requiredLessons -
-      validCompletedLessons.length
+      Math.max(
+        0,
+        requiredLessons -
+          validCompletedLessons.length
+      )
 
     return (
       <DashboardLayout>
-
         <div className="min-h-screen bg-slate-50 p-6">
-
           <div className="mx-auto max-w-4xl">
-
             <button
               onClick={() =>
                 navigate(
@@ -698,13 +1169,10 @@ function Quiz() {
             </button>
 
             <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center shadow-sm">
-
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 text-slate-500">
-
                 <LockKeyhole
                   size={30}
                 />
-
               </div>
 
               <h1 className="mt-5 text-2xl font-bold text-slate-900">
@@ -722,7 +1190,6 @@ function Quiz() {
               </p>
 
               <div className="mx-auto mt-6 max-w-md rounded-xl bg-purple-50 p-4">
-
                 <p className="text-sm font-semibold text-purple-700">
                   {
                     validCompletedLessons.length
@@ -740,7 +1207,6 @@ function Quiz() {
                     : 's'}{' '}
                   remaining
                 </p>
-
               </div>
 
               <button
@@ -753,29 +1219,22 @@ function Quiz() {
               >
                 Continue Learning
               </button>
-
             </div>
-
           </div>
-
         </div>
-
       </DashboardLayout>
     )
   }
 
   // ==================================================
-  // PRE-ASSESSMENT CHECK
+  // PRE-ASSESSMENT SYSTEM CHECK
   // ==================================================
 
   if (!assessmentStarted) {
     return (
       <DashboardLayout>
-
         <div className="min-h-screen bg-slate-50 p-6">
-
           <div className="mx-auto max-w-5xl">
-
             <button
               onClick={() => {
                 stopMedia()
@@ -794,19 +1253,16 @@ function Quiz() {
             </button>
 
             <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
-
               <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
-
                 <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-purple-50 text-purple-600">
-
                   <ShieldCheck
                     size={24}
                   />
-
                 </div>
 
                 <p className="mt-5 text-sm font-semibold text-purple-600">
-                  Proctored Assessment
+                  Proctored
+                  Assessment
                 </p>
 
                 <h1 className="mt-2 text-3xl font-bold text-slate-950">
@@ -814,14 +1270,14 @@ function Quiz() {
                 </h1>
 
                 <p className="mt-2 text-sm leading-6 text-slate-500">
-                  Complete the system
-                  check before starting
-                  your assessment for{' '}
-                  {topic.title}.
+                  Complete the
+                  system check
+                  before starting
+                  your assessment
+                  for {topic.title}.
                 </p>
 
                 <div className="mt-7 space-y-4">
-
                   <Requirement
                     icon={
                       <Camera
@@ -854,7 +1310,7 @@ function Quiz() {
                         size={20}
                       />
                     }
-                    title="10 Minute Timer"
+                    title={`${quiz.durationMinutes} Minute Timer`}
                     description="The assessment is automatically submitted when time expires."
                     complete
                   />
@@ -869,46 +1325,37 @@ function Quiz() {
                     description="Copying and context-menu actions are restricted inside the assessment."
                     complete
                   />
-
                 </div>
 
                 <div className="mt-7 rounded-2xl border border-amber-200 bg-amber-50 p-4">
-
                   <div className="flex items-start gap-3">
-
                     <AlertTriangle
                       size={19}
                       className="mt-0.5 shrink-0 text-amber-600"
                     />
 
                     <div>
-
                       <p className="text-sm font-semibold text-amber-900">
-                        Before you continue
+                        Before you
+                        continue
                       </p>
 
                       <p className="mt-1 text-xs leading-5 text-amber-700">
                         SkillForge will
-                        access your camera,
-                        require screen
-                        sharing and record
-                        assessment
+                        access your
+                        camera, require
+                        screen sharing,
+                        and log
                         integrity events
                         such as the quiz
                         tab becoming
-                        inactive or screen
-                        sharing being
-                        stopped. This
-                        prototype does not
-                        upload or store
-                        camera or screen
-                        recordings.
+                        inactive or
+                        screen sharing
+                        being stopped.
+                        SkillForge will record your webcam and shared screen throughout this assessment. The recordings will be uploaded to private storage and made available to authorized administrators for assessment integrity review. Tab changes and interruptions to screen sharing may also be logged. Start the assessment only if you consent to this recording.
                       </p>
-
                     </div>
-
                   </div>
-
                 </div>
 
                 {mediaError && (
@@ -918,7 +1365,6 @@ function Quiz() {
                 )}
 
                 <div className="mt-7 grid gap-3 sm:grid-cols-2">
-
                   <button
                     onClick={
                       enableCamera
@@ -968,36 +1414,31 @@ function Quiz() {
                       ? 'Screen Ready'
                       : 'Share Screen'}
                   </button>
-
                 </div>
 
                 <button
-                  onClick={
-                    startAssessment
-                  }
+                  onClick={startAssessment}
                   disabled={
                     !cameraEnabled ||
-                    !screenEnabled
+                    !screenEnabled ||
+                    recordingStarting
                   }
                   className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-purple-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-40"
                 >
+                  {recordingStarting
+                   ? 'Starting secure recording...'
+                   : 'Start Assessment'}
                   <ShieldCheck
                     size={18}
                   />
 
                   Start Assessment
                 </button>
-
               </div>
 
-              {/* CAMERA PREVIEW */}
-
               <div>
-
                 <div className="overflow-hidden rounded-3xl bg-slate-950 shadow-sm">
-
                   <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-
                     <span className="text-sm font-semibold text-white">
                       Camera Preview
                     </span>
@@ -1013,11 +1454,9 @@ function Quiz() {
                         className="text-slate-500"
                       />
                     )}
-
                   </div>
 
                   <div className="aspect-video bg-slate-900">
-
                     {cameraEnabled ? (
                       <video
                         ref={
@@ -1030,9 +1469,7 @@ function Quiz() {
                       />
                     ) : (
                       <div className="flex h-full items-center justify-center">
-
                         <div className="text-center">
-
                           <CameraOff
                             size={32}
                             className="mx-auto text-slate-600"
@@ -1042,18 +1479,13 @@ function Quiz() {
                             Camera not
                             enabled
                           </p>
-
                         </div>
-
                       </div>
                     )}
-
                   </div>
-
                 </div>
 
                 <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5">
-
                   <p className="text-sm font-semibold text-slate-900">
                     System Status
                   </p>
@@ -1071,23 +1503,17 @@ function Quiz() {
                       screenEnabled
                     }
                   />
-
                 </div>
-
               </div>
-
             </div>
-
           </div>
-
         </div>
-
       </DashboardLayout>
     )
   }
 
   // ==================================================
-  // QUIZ
+  // ACTIVE QUIZ
   // ==================================================
 
   const question =
@@ -1096,9 +1522,7 @@ function Quiz() {
     ]
 
   const selectedAnswer =
-    answers[
-      currentQuestion
-    ]
+    answers[currentQuestion]
 
   const answeredCount =
     Object.keys(
@@ -1107,7 +1531,8 @@ function Quiz() {
 
   const isLastQuestion =
     currentQuestion ===
-    attemptQuestions.length - 1
+    attemptQuestions.length -
+      1
 
   const minutes =
     Math.floor(
@@ -1123,6 +1548,7 @@ function Quiz() {
     setAnswers(
       (previous) => ({
         ...previous,
+
         [currentQuestion]:
           optionIndex,
       })
@@ -1146,12 +1572,11 @@ function Quiz() {
   }
 
   // ==================================================
-  // PROTECTED ASSESSMENT UI
+  // PROTECTED QUIZ UI
   // ==================================================
 
   return (
     <DashboardLayout>
-
       <div
         className="min-h-screen select-none bg-slate-100 p-5 sm:p-6"
         onCopy={(event) =>
@@ -1165,31 +1590,26 @@ function Quiz() {
         ) =>
           event.preventDefault()
         }
-        onDragStart={(event) =>
+        onDragStart={(
+          event
+        ) =>
           event.preventDefault()
         }
       >
-
         <div className="mx-auto max-w-6xl">
-
-          {/* TOP STATUS */}
-
           <div className="mb-5 flex flex-col gap-3 rounded-2xl bg-slate-950 p-4 text-white sm:flex-row sm:items-center sm:justify-between">
-
             <div>
-
               <p className="text-xs font-semibold uppercase tracking-wide text-purple-300">
-                Proctored Assessment
+                Proctored
+                Assessment
               </p>
 
               <p className="mt-1 font-semibold">
                 {topic.title}
               </p>
-
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-
               <StatusBadge
                 icon={
                   cameraEnabled ? (
@@ -1235,7 +1655,6 @@ function Quiz() {
               />
 
               <div className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm font-bold">
-
                 <Clock3
                   size={15}
                 />
@@ -1253,24 +1672,17 @@ function Quiz() {
                   2,
                   '0'
                 )}
-
               </div>
-
             </div>
-
           </div>
 
           <div className="grid gap-5 lg:grid-cols-[1fr_280px]">
-
-            {/* QUESTION */}
-
             <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-
               <div className="flex items-center justify-between">
-
                 <span className="text-sm font-semibold text-purple-600">
                   Question{' '}
-                  {currentQuestion + 1}{' '}
+                  {currentQuestion +
+                    1}{' '}
                   of{' '}
                   {
                     attemptQuestions.length
@@ -1281,11 +1693,9 @@ function Quiz() {
                   {answeredCount}{' '}
                   answered
                 </span>
-
               </div>
 
               <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
-
                 <div
                   className="h-full rounded-full bg-purple-600 transition-all"
                   style={{
@@ -1297,7 +1707,6 @@ function Quiz() {
                     }%`,
                   }}
                 />
-
               </div>
 
               <h1 className="mt-7 text-xl font-semibold leading-8 text-slate-950">
@@ -1307,7 +1716,6 @@ function Quiz() {
               </h1>
 
               <div className="mt-7 space-y-3">
-
                 {question.options.map(
                   (
                     option,
@@ -1319,7 +1727,9 @@ function Quiz() {
 
                     return (
                       <button
-                        key={`${option}-${index}`}
+                        key={
+                          option.id
+                        }
                         onClick={() =>
                           selectAnswer(
                             index
@@ -1331,7 +1741,6 @@ function Quiz() {
                             : 'border-slate-200 hover:border-purple-300 hover:bg-purple-50'
                         }`}
                       >
-
                         <span
                           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${
                             isSelected
@@ -1346,25 +1755,32 @@ function Quiz() {
                         </span>
 
                         <span className="font-medium text-slate-700">
-                          {option}
+                          {
+                            option.text
+                          }
                         </span>
 
                         {isSelected && (
                           <CheckCircle2
-                            size={19}
+                            size={
+                              19
+                            }
                             className="ml-auto shrink-0 text-purple-600"
                           />
                         )}
-
                       </button>
                     )
                   }
                 )}
-
               </div>
 
-              <div className="mt-8 flex justify-end border-t border-slate-200 pt-6">
+              {submitError && (
+                <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                  {submitError}
+                </div>
+              )}
 
+              <div className="mt-8 flex justify-end border-t border-slate-200 pt-6">
                 {!isLastQuestion ? (
                   <button
                     onClick={
@@ -1384,45 +1800,39 @@ function Quiz() {
                   </button>
                 ) : (
                   <button
-                    onClick={
-                      submitQuiz
+                    onClick={() =>
+                      void submitQuiz()
                     }
                     disabled={
                       selectedAnswer ===
-                      undefined
+                        undefined ||
+                      isSubmitting
                     }
                     className="flex items-center gap-2 rounded-xl bg-green-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    Submit Assessment
+                    {isSubmitting
+                      ? 'Submitting...'
+                      : 'Submit Assessment'}
 
                     <CheckCircle2
                       size={17}
                     />
                   </button>
                 )}
-
               </div>
-
             </div>
 
-            {/* PROCTOR PANEL */}
-
             <div>
-
               <div className="overflow-hidden rounded-2xl bg-slate-950">
-
                 <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-
                   <span className="text-xs font-semibold text-white">
                     Camera
                   </span>
 
                   <span className="h-2 w-2 rounded-full bg-green-400" />
-
                 </div>
 
                 <div className="aspect-video bg-slate-900">
-
                   <video
                     ref={
                       cameraVideoRef
@@ -1432,15 +1842,11 @@ function Quiz() {
                     playsInline
                     className="h-full w-full object-cover"
                   />
-
                 </div>
-
               </div>
 
               <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-
                 <div className="flex items-center gap-2">
-
                   <ShieldCheck
                     size={17}
                     className="text-purple-600"
@@ -1449,7 +1855,6 @@ function Quiz() {
                   <p className="text-sm font-semibold text-slate-900">
                     Integrity Status
                   </p>
-
                 </div>
 
                 <p className="mt-3 text-3xl font-bold text-slate-950">
@@ -1470,26 +1875,19 @@ function Quiz() {
                 {integrityEvents.length >
                   0 && (
                   <div className="mt-4 rounded-xl bg-amber-50 p-3">
-
                     <p className="text-xs font-semibold text-amber-800">
-                      Assessment activity
-                      has been logged for
+                      Assessment
+                      activity has
+                      been logged for
                       review.
                     </p>
-
                   </div>
                 )}
-
               </div>
-
             </div>
-
           </div>
-
         </div>
-
       </div>
-
     </DashboardLayout>
   )
 }
@@ -1513,13 +1911,11 @@ function Requirement({
 }: RequirementProps) {
   return (
     <div className="flex items-start gap-4 rounded-2xl border border-slate-200 p-4">
-
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-purple-50 text-purple-600">
         {icon}
       </div>
 
       <div className="flex-1">
-
         <p className="text-sm font-semibold text-slate-900">
           {title}
         </p>
@@ -1527,7 +1923,6 @@ function Requirement({
         <p className="mt-1 text-xs leading-5 text-slate-500">
           {description}
         </p>
-
       </div>
 
       {complete && (
@@ -1536,7 +1931,6 @@ function Requirement({
           className="shrink-0 text-green-600"
         />
       )}
-
     </div>
   )
 }
@@ -1556,7 +1950,6 @@ function StatusRow({
 }: StatusRowProps) {
   return (
     <div className="mt-4 flex items-center justify-between">
-
       <span className="text-sm text-slate-600">
         {label}
       </span>
@@ -1572,7 +1965,6 @@ function StatusRow({
           ? 'Ready'
           : 'Required'}
       </span>
-
     </div>
   )
 }

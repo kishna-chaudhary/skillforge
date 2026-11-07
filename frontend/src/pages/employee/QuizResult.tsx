@@ -7,6 +7,7 @@ import {
 
 import {
   useEffect,
+  useState,
 } from 'react'
 
 import type {
@@ -20,14 +21,52 @@ import {
 } from 'react-router-dom'
 
 import DashboardLayout from '../../layouts/DashboardLayout'
-import { roadmapData } from '../../data/roadmapData'
+
+// ============================================================
+// TYPES
+// ============================================================
 
 interface QuizResultState {
   score: number
   correctAnswers: number
   totalQuestions: number
   passingScore: number
+
+  // This value comes from the backend assessment submission.
+  passed: boolean
+
+  attemptId?: string
+  integrityEvents?: number
 }
+
+interface AssessmentInfoResponse {
+  success: boolean
+
+  role: {
+    id: string
+    slug: string
+    title: string
+  }
+
+  topic: {
+    id: string
+    slug: string
+    title: string
+    lessonCount: number
+  }
+
+  assessment: {
+    id: string
+    title: string
+    description: string | null
+    passingScore: number
+    durationMinutes: number
+  }
+}
+
+// ============================================================
+// QUIZ RESULT
+// ============================================================
 
 function QuizResult() {
   const navigate =
@@ -41,33 +80,9 @@ function QuizResult() {
     topicId,
   } = useParams()
 
-  /*
-  |--------------------------------------------------------------------------
-  | ROLE AND TOPIC
-  |--------------------------------------------------------------------------
-  */
-
-  const topicKey =
-    roleId && topicId
-      ? `${roleId}/${topicId}`
-      : ''
-
-  const role =
-    roleId
-      ? roadmapData[roleId]
-      : undefined
-
-  const topic =
-    role?.topics.find(
-      (item) =>
-        item.id === topicId
-    )
-
-  /*
-  |--------------------------------------------------------------------------
-  | QUIZ RESULT
-  |--------------------------------------------------------------------------
-  */
+  // ==========================================================
+  // RESULT FROM BACKEND SUBMISSION
+  // ==========================================================
 
   const result =
     location.state as
@@ -86,6 +101,9 @@ function QuizResult() {
   const passingScore =
     result?.passingScore ?? 70
 
+  const passed =
+    result?.passed === true
+
   const incorrectAnswers =
     Math.max(
       totalQuestions -
@@ -93,103 +111,141 @@ function QuizResult() {
       0
     )
 
-  const passed =
-    Boolean(result) &&
-    score >= passingScore
+  // ==========================================================
+  // ROLE / TOPIC INFORMATION
+  // ==========================================================
 
-  /*
-  |--------------------------------------------------------------------------
-  | MARK TOPIC COMPLETE
-  |--------------------------------------------------------------------------
-  |
-  | IMPORTANT:
-  | Completing lessons does NOT complete the topic.
-  |
-  | Only passing the quiz adds the topic to:
-  |
-  | skillforge_completed_topics
-  |
-  */
+  const [
+    assessmentInfo,
+    setAssessmentInfo,
+  ] =
+    useState<AssessmentInfoResponse | null>(
+      null
+    )
 
-  useEffect(
-    () => {
-      if (
-        !result ||
-        !passed ||
-        !topicKey
-      ) {
-        return
-      }
+  const [
+    isLoading,
+    setIsLoading,
+  ] =
+    useState(true)
 
-      const storageKey =
-        'skillforge_completed_topics'
+  const [
+    loadError,
+    setLoadError,
+  ] =
+    useState('')
 
-      const saved =
-        localStorage.getItem(
-          storageKey
-        )
+  useEffect(() => {
+    if (!roleId || !topicId) {
+      setIsLoading(false)
+      return
+    }
 
-      let completedTopics: string[] =
-        []
+    let cancelled = false
 
-      if (saved) {
+    const loadAssessmentInfo =
+      async () => {
+        setIsLoading(true)
+        setLoadError('')
+
         try {
-          const parsed =
-            JSON.parse(saved)
+          const token =
+            localStorage.getItem(
+              'skillforge-token'
+            )
 
-          if (
-            Array.isArray(parsed)
-          ) {
-            completedTopics =
-              parsed.filter(
-                (
-                  value
-                ): value is string =>
-                  typeof value ===
-                  'string'
-              )
+          if (!token) {
+            throw new Error(
+              'Authentication required.'
+            )
           }
-        } catch {
-          completedTopics = []
+
+          const response =
+            await fetch(
+              `http://localhost:5000/api/assessments/${encodeURIComponent(
+                roleId
+              )}/topics/${encodeURIComponent(
+                topicId
+              )}`,
+              {
+                headers: {
+                  Authorization:
+                    `Bearer ${token}`,
+                },
+              }
+            )
+
+          const data =
+            await response.json()
+
+          if (!response.ok) {
+            throw new Error(
+              data.message ||
+                'Failed to load assessment.'
+            )
+          }
+
+          if (!cancelled) {
+            setAssessmentInfo(
+              data as AssessmentInfoResponse
+            )
+          }
+        } catch (error) {
+          if (!cancelled) {
+            setLoadError(
+              error instanceof Error
+                ? error.message
+                : 'Failed to load assessment.'
+            )
+          }
+        } finally {
+          if (!cancelled) {
+            setIsLoading(false)
+          }
         }
       }
 
-      if (
-        completedTopics.includes(
-          topicKey
-        )
-      ) {
-        return
-      }
+    void loadAssessmentInfo()
 
-      const updatedTopics = [
-        ...completedTopics,
-        topicKey,
-      ]
+    return () => {
+      cancelled = true
+    }
+  }, [
+    roleId,
+    topicId,
+  ])
 
-      localStorage.setItem(
-        storageKey,
-        JSON.stringify(
-          updatedTopics
-        )
-      )
-    },
-    [
-      result,
-      passed,
-      topicKey,
-    ]
-  )
+  const role =
+    assessmentInfo?.role
 
-  /*
-  |--------------------------------------------------------------------------
-  | INVALID RESULT
-  |--------------------------------------------------------------------------
-  |
-  | This can happen if someone directly opens the result URL
-  | or refreshes the page because React Router state is temporary.
-  |
-  */
+  const topic =
+    assessmentInfo?.topic
+
+  // ==========================================================
+  // LOADING
+  // ==========================================================
+
+  if (isLoading) {
+    return (
+      <DashboardLayout>
+        <div className="min-h-screen bg-slate-50 p-6">
+          <div className="mx-auto max-w-3xl">
+            <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+              <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-purple-100 border-t-purple-600" />
+
+              <p className="mt-4 text-sm font-medium text-slate-500">
+                Loading quiz result...
+              </p>
+            </div>
+          </div>
+        </div>
+      </DashboardLayout>
+    )
+  }
+
+  // ==========================================================
+  // INVALID RESULT
+  // ==========================================================
 
   if (
     !roleId ||
@@ -200,13 +256,9 @@ function QuizResult() {
   ) {
     return (
       <DashboardLayout>
-
         <div className="min-h-screen bg-slate-50 p-6">
-
           <div className="mx-auto max-w-3xl">
-
             <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-
               <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 text-slate-500">
                 <Award size={28} />
               </div>
@@ -216,54 +268,49 @@ function QuizResult() {
               </h1>
 
               <p className="mt-2 text-sm leading-6 text-slate-500">
-                Complete the topic quiz first to view your result.
+                {loadError ||
+                  'Complete the topic quiz first to view your result.'}
               </p>
 
               <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
+                {roleId &&
+                  topicId && (
+                    <button
+                      onClick={() =>
+                        navigate(
+                          `/employee/roles/${roleId}/topics/${topicId}/quiz`
+                        )
+                      }
+                      className="rounded-xl bg-purple-600 px-5 py-3 text-sm font-semibold text-white hover:bg-purple-700"
+                    >
+                      Back to Quiz
+                    </button>
+                  )}
 
-                {roleId && topicId && (
-                  <button
-                    onClick={() =>
-                      navigate(
-                        `/employee/roles/${roleId}/topics/${topicId}/quiz`
-                      )
-                    }
-                    className="rounded-xl bg-purple-600 px-5 py-3 text-sm font-semibold text-white hover:bg-purple-700"
-                  >
-                    Back to Quiz
-                  </button>
-                )}
-
-                {roleId && topicId && (
-                  <button
-                    onClick={() =>
-                      navigate(
-                        `/employee/roles/${roleId}/topics/${topicId}`
-                      )
-                    }
-                    className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                  >
-                    Back to Topic
-                  </button>
-                )}
-
+                {roleId &&
+                  topicId && (
+                    <button
+                      onClick={() =>
+                        navigate(
+                          `/employee/roles/${roleId}/topics/${topicId}`
+                        )
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Back to Topic
+                    </button>
+                  )}
               </div>
-
             </div>
-
           </div>
-
         </div>
-
       </DashboardLayout>
     )
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | ACTIONS
-  |--------------------------------------------------------------------------
-  */
+  // ==========================================================
+  // ACTIONS
+  // ==========================================================
 
   const retryQuiz = () => {
     navigate(
@@ -283,23 +330,17 @@ function QuizResult() {
     )
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | PAGE
-  |--------------------------------------------------------------------------
-  */
+  // ==========================================================
+  // PAGE
+  // ==========================================================
 
   return (
     <DashboardLayout>
-
       <div className="min-h-screen bg-slate-50 p-6">
-
         <div className="mx-auto max-w-4xl">
-
           {/* HEADER */}
 
           <div className="text-center">
-
             <div
               className={`mx-auto flex h-16 w-16 items-center justify-center rounded-full ${
                 passed
@@ -321,19 +362,18 @@ function QuizResult() {
             </h1>
 
             <p className="mt-2 text-slate-500">
-              {topic.title} Assessment
+              {topic.title}{' '}
+              Assessment
             </p>
 
             <p className="mt-1 text-sm text-slate-400">
               {role.title}
             </p>
-
           </div>
 
           {/* SCORE */}
 
           <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-
             <p className="text-sm font-medium text-slate-500">
               Your Score
             </p>
@@ -349,7 +389,6 @@ function QuizResult() {
             </h2>
 
             <div className="mx-auto mt-5 h-3 max-w-md overflow-hidden rounded-full bg-slate-100">
-
               <div
                 className={`h-full rounded-full transition-all duration-500 ${
                   passed
@@ -357,17 +396,15 @@ function QuizResult() {
                     : 'bg-red-500'
                 }`}
                 style={{
-                  width:
-                    `${Math.min(
-                      Math.max(
-                        score,
-                        0
-                      ),
-                      100
-                    )}%`,
+                  width: `${Math.min(
+                    Math.max(
+                      score,
+                      0
+                    ),
+                    100
+                  )}%`,
                 }}
               />
-
             </div>
 
             <p
@@ -383,26 +420,23 @@ function QuizResult() {
             </p>
 
             <p className="mt-1 text-sm text-slate-500">
-              Passing score: {passingScore}%
+              Passing score:{' '}
+              {passingScore}%
             </p>
-
           </div>
 
           {/* STATISTICS */}
 
           <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-
             <ResultCard
               icon={
                 <CheckCircle2
                   size={22}
                 />
               }
-              value={
-                String(
-                  correctAnswers
-                )
-              }
+              value={String(
+                correctAnswers
+              )}
               label="Correct Answers"
               type="success"
             />
@@ -413,11 +447,9 @@ function QuizResult() {
                   size={22}
                 />
               }
-              value={
-                String(
-                  incorrectAnswers
-                )
-              }
+              value={String(
+                incorrectAnswers
+              )}
               label="Incorrect Answers"
               type="error"
             />
@@ -428,28 +460,24 @@ function QuizResult() {
                   size={22}
                 />
               }
-              value={
-                String(
-                  totalQuestions
-                )
-              }
+              value={String(
+                totalQuestions
+              )}
               label="Total Questions"
               type="purple"
             />
-
           </div>
 
           {/* PERFORMANCE SUMMARY */}
 
           <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-
             <h2 className="text-lg font-bold text-slate-900">
               Performance Summary
             </h2>
 
             <p className="mt-2 text-sm leading-6 text-slate-500">
               {passed
-                ? `You successfully passed the ${topic.title} assessment. This topic is now completed in your ${role.title} roadmap.`
+                ? `You successfully passed the ${topic.title} assessment. Your passing attempt has been saved to your ${role.title} progress.`
                 : `You scored ${score}%. You need at least ${passingScore}% to complete ${topic.title}. Review the lessons and try the assessment again.`}
             </p>
 
@@ -460,7 +488,6 @@ function QuizResult() {
                   : 'bg-purple-50'
               }`}
             >
-
               <p
                 className={`text-sm font-semibold ${
                   passed
@@ -481,25 +508,35 @@ function QuizResult() {
                 }`}
               >
                 {passed
-                  ? 'Your progress has been saved. Return to your roadmap and continue with the next topic.'
+                  ? 'Your progress is stored securely on the server. Return to your roadmap and continue with the next topic.'
                   : 'Review the lessons you found difficult, then retry the quiz. The topic will remain incomplete until you pass.'}
               </p>
-
             </div>
-
           </div>
+
+          {/* ATTEMPT INFORMATION */}
+
+          {result.attemptId && (
+            <div className="mt-4 text-center">
+              <p className="text-xs text-slate-400">
+                Assessment attempt #
+                {result.attemptId}
+              </p>
+            </div>
+          )}
 
           {/* ACTIONS */}
 
           <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
-
             <button
               onClick={
                 retryQuiz
               }
               className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-6 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
-              <RotateCcw size={18} />
+              <RotateCcw
+                size={18}
+              />
 
               {passed
                 ? 'Retake Quiz'
@@ -525,27 +562,22 @@ function QuizResult() {
                 Continue Roadmap
               </button>
             )}
-
           </div>
-
         </div>
-
       </div>
-
     </DashboardLayout>
   )
 }
 
-/*
-|--------------------------------------------------------------------------
-| RESULT CARD
-|--------------------------------------------------------------------------
-*/
+// ============================================================
+// RESULT CARD
+// ============================================================
 
 interface ResultCardProps {
   icon: ReactNode
   value: string
   label: string
+
   type:
     | 'success'
     | 'error'
@@ -571,9 +603,7 @@ function ResultCard({
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-
       <div className="flex items-center gap-3">
-
         <div
           className={`rounded-xl p-3 ${styles[type]}`}
         >
@@ -581,7 +611,6 @@ function ResultCard({
         </div>
 
         <div>
-
           <p className="text-2xl font-bold text-slate-900">
             {value}
           </p>
@@ -589,11 +618,8 @@ function ResultCard({
           <p className="text-xs text-slate-500">
             {label}
           </p>
-
         </div>
-
       </div>
-
     </div>
   )
 }

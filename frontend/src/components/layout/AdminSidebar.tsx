@@ -1,18 +1,27 @@
+
+import type { ComponentType } from 'react'
+
 import {
   Award,
   BarChart3,
   BookOpenCheck,
   BriefcaseBusiness,
+  Code2,
   LayoutDashboard,
   LogOut,
   Users,
   Video,
+  VideoIcon,
 } from 'lucide-react'
 
 import {
   NavLink,
   useNavigate,
 } from 'react-router-dom'
+
+import {
+  useAuth,
+} from '../../context/AuthContext'
 
 const overviewItems = [
   {
@@ -37,6 +46,16 @@ const learningItems = [
     label: 'Assessments',
     path: '/admin/assessments',
     icon: BarChart3,
+  },
+  {
+    label: 'Quiz Recordings',
+    path: '/admin/quiz-recordings',
+    icon: VideoIcon,
+  },
+  {
+    label: 'Practical Challenges',
+    path: '/admin/practical-challenges',
+    icon: Code2,
   },
 ]
 
@@ -66,23 +85,31 @@ const managementItems = [
 function AdminSidebar() {
   const navigate = useNavigate()
 
+  const {
+    user,
+    logout,
+  } = useAuth()
+
   const handleLogout = () => {
-    localStorage.removeItem(
-      'isAuthenticated'
-    )
+    logout()
 
     navigate('/login', {
       replace: true,
     })
   }
 
+  const displayName =
+    user?.fullName ||
+    'Administrator'
+
+  const initial =
+    displayName
+      .charAt(0)
+      .toUpperCase()
+
   return (
     <aside className="fixed left-0 top-0 z-40 flex h-screen w-64 flex-col bg-slate-950 text-white">
-
-      {/* LOGO */}
-
       <div className="flex h-20 items-center border-b border-slate-800 px-6">
-
         <div>
           <h1 className="text-2xl font-bold text-white">
             SkillForge
@@ -92,13 +119,9 @@ function AdminSidebar() {
             Admin Portal
           </p>
         </div>
-
       </div>
 
-      {/* NAVIGATION */}
-
       <nav className="flex-1 overflow-y-auto px-4 py-6">
-
         <SidebarSection
           title="Overview"
           items={overviewItems}
@@ -113,34 +136,27 @@ function AdminSidebar() {
           title="Management"
           items={managementItems}
         />
-
       </nav>
 
-      {/* ADMIN / LOGOUT */}
-
       <div className="border-t border-slate-800 p-4">
-
         <div className="mb-3 flex items-center gap-3 rounded-xl px-3 py-2">
-
           <div className="flex h-9 w-9 items-center justify-center rounded-full bg-purple-600 text-sm font-semibold text-white">
-            A
+            {initial}
           </div>
 
           <div className="min-w-0">
-
             <p className="truncate text-sm font-semibold text-white">
-              Administrator
+              {displayName}
             </p>
 
             <p className="truncate text-xs text-slate-400">
               Admin
             </p>
-
           </div>
-
         </div>
 
         <button
+          type="button"
           onClick={handleLogout}
           className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-300 transition hover:bg-slate-800 hover:text-white"
         >
@@ -150,9 +166,7 @@ function AdminSidebar() {
             Logout
           </span>
         </button>
-
       </div>
-
     </aside>
   )
 }
@@ -160,7 +174,7 @@ function AdminSidebar() {
 interface SidebarItem {
   label: string
   path: string
-  icon: React.ComponentType<{
+  icon: ComponentType<{
     size?: number
   }>
 }
@@ -176,13 +190,11 @@ function SidebarSection({
 }: SidebarSectionProps) {
   return (
     <div className="mb-7">
-
       <p className="mb-3 px-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
         {title}
       </p>
 
       <div className="space-y-1">
-
         {items.map((item) => {
           const Icon = item.icon
 
@@ -208,9 +220,7 @@ function SidebarSection({
             </NavLink>
           )
         })}
-
       </div>
-
     </div>
   )
 }

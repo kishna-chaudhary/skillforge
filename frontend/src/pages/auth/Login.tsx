@@ -1,16 +1,39 @@
-import type{
-  FormEvent,
-  } from 'react'
-  import {
-    useState,
-  } from 'react'
-
 import {
+  useAuth,
+} from '../../context/AuthContext'
+import type {
+  FormEvent,
+} from 'react'
+import {
+  useState,
+} from 'react'
+import {
+  useLocation,
   useNavigate,
 } from 'react-router-dom'
 
+interface LoginResponse {
+  success: boolean
+  message: string
+  token?: string
+  user?: {
+    id: string
+    fullName: string
+    email: string
+    role: 'employee' | 'admin'
+  }
+}
+
+interface LocationState {
+  from?: string
+}
+
 function Login() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const {
+  login,
+} = useAuth()
 
   const [email, setEmail] =
     useState('')
@@ -24,103 +47,122 @@ function Login() {
   const [showPassword, setShowPassword] =
     useState(false)
 
-  const handleSubmit = (
+  const [isSubmitting, setIsSubmitting] =
+    useState(false)
+
+  const handleSubmit = async (
     event: FormEvent<HTMLFormElement>
   ) => {
     event.preventDefault()
 
     setError('')
+    setIsSubmitting(true)
 
-    const normalizedEmail =
-      email.trim().toLowerCase()
-
-    // ==================================================
-    // DEMO EMPLOYEE LOGIN
-    // ==================================================
-
-    if (
-      normalizedEmail ===
-        'employee@skillforge.com' &&
-      password === 'employee123'
-    ) {
-      localStorage.setItem(
-        'skillforge-auth',
-        'true'
+    try {
+      const response = await fetch(
+        'http://localhost:5000/api/auth/login',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type':
+              'application/json',
+          },
+          body: JSON.stringify({
+            email: email
+              .trim()
+              .toLowerCase(),
+            password,
+          }),
+        }
       )
 
-      localStorage.setItem(
-        'skillforge-role',
-        'employee'
-      )
+      const data =
+        (await response.json()) as LoginResponse
 
-      localStorage.setItem(
-        'skillforge-user',
-        'Employee'
-      )
+      if (
+        !response.ok ||
+        !data.success ||
+        !data.token ||
+        !data.user
+      ) {
+        setError(
+          data.message ||
+            'Unable to sign in.'
+        )
+
+        return
+      }
+
+      login(
+          data.token,
+          data.user
+        )
+
+      const state =
+        location.state as
+          | LocationState
+          | null
+
+      const requestedPath =
+        state?.from
+
+      if (
+        requestedPath &&
+        requestedPath.startsWith(
+          `/${data.user.role}/`
+        )
+      ) {
+        navigate(
+          requestedPath,
+          {
+            replace: true,
+          }
+        )
+
+        return
+      }
+
+      if (
+        data.user.role === 'admin'
+      ) {
+        navigate(
+          '/admin/dashboard',
+          {
+            replace: true,
+          }
+        )
+
+        return
+      }
 
       navigate(
         '/employee/dashboard',
-        { replace: true }
+        {
+          replace: true,
+        }
+      )
+    } catch (requestError) {
+      console.error(
+        'Login request failed:',
+        requestError
       )
 
-      return
+      setError(
+        'Unable to connect to the SkillForge server.'
+      )
+    } finally {
+      setIsSubmitting(false)
     }
-
-    // ==================================================
-    // DEMO ADMIN LOGIN
-    // ==================================================
-
-    if (
-      normalizedEmail ===
-        'admin@skillforge.com' &&
-      password === 'admin123'
-    ) {
-      localStorage.setItem(
-        'skillforge-auth',
-        'true'
-      )
-
-      localStorage.setItem(
-        'skillforge-role',
-        'admin'
-      )
-
-      localStorage.setItem(
-        'skillforge-user',
-        'Admin'
-      )
-
-      navigate(
-        '/admin/dashboard',
-        { replace: true }
-      )
-
-      return
-    }
-
-    // ==================================================
-    // INVALID LOGIN
-    // ==================================================
-
-    setError(
-      'Invalid email or password.'
-    )
   }
 
   return (
     <div className="min-h-screen bg-slate-950">
-
       <div className="flex min-h-screen">
-
-        {/* ==================================================
-            LEFT SIDE
-        ================================================== */}
+        {/* Left side */}
 
         <div className="hidden w-1/2 flex-col justify-between bg-purple-700 p-12 text-white lg:flex">
-
           <div>
             <div className="flex items-center gap-3">
-
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-xl font-bold text-purple-700">
                 S
               </div>
@@ -128,11 +170,9 @@ function Login() {
               <span className="text-2xl font-bold">
                 SkillForge
               </span>
-
             </div>
 
             <div className="mt-20 max-w-lg">
-
               <h1 className="text-5xl font-bold leading-tight">
                 Build skills.
                 <br />
@@ -145,29 +185,21 @@ function Login() {
                 learning materials, and live
                 doubt-solving sessions.
               </p>
-
             </div>
           </div>
 
           <p className="text-sm text-purple-200">
             SkillForge Learning Platform
           </p>
-
         </div>
 
-
-        {/* ==================================================
-            RIGHT SIDE
-        ================================================== */}
+        {/* Right side */}
 
         <div className="flex w-full items-center justify-center bg-slate-50 px-6 py-12 lg:w-1/2">
-
           <div className="w-full max-w-md">
-
-            {/* Mobile Logo */}
+            {/* Mobile logo */}
 
             <div className="mb-10 flex items-center gap-3 lg:hidden">
-
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-600 text-lg font-bold text-white">
                 S
               </div>
@@ -175,14 +207,11 @@ function Login() {
               <span className="text-2xl font-bold text-slate-900">
                 SkillForge
               </span>
-
             </div>
-
 
             {/* Heading */}
 
             <div>
-
               <h2 className="text-3xl font-bold text-slate-900">
                 Welcome back
               </h2>
@@ -190,21 +219,17 @@ function Login() {
               <p className="mt-2 text-sm text-slate-500">
                 Sign in to continue learning.
               </p>
-
             </div>
 
-
-            {/* Login Form */}
+            {/* Login form */}
 
             <form
               onSubmit={handleSubmit}
               className="mt-8 space-y-5"
             >
-
               {/* Email */}
 
               <div>
-
                 <label
                   htmlFor="email"
                   className="mb-2 block text-sm font-medium text-slate-700"
@@ -224,18 +249,15 @@ function Login() {
                   placeholder="Enter your email"
                   autoComplete="email"
                   required
-                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-purple-500 focus:ring-2 focus:ring-purple-100"
+                  disabled={isSubmitting}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-purple-500 focus:ring-2 focus:ring-purple-100 disabled:cursor-not-allowed disabled:bg-slate-100"
                 />
-
               </div>
-
 
               {/* Password */}
 
               <div>
-
                 <div className="mb-2 flex items-center justify-between">
-
                   <label
                     htmlFor="password"
                     className="block text-sm font-medium text-slate-700"
@@ -254,11 +276,9 @@ function Login() {
                   >
                     Forgot password?
                   </button>
-
                 </div>
 
                 <div className="relative">
-
                   <input
                     id="password"
                     type={
@@ -275,7 +295,8 @@ function Login() {
                     placeholder="Enter your password"
                     autoComplete="current-password"
                     required
-                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 pr-20 text-sm text-slate-900 outline-none transition focus:border-purple-500 focus:ring-2 focus:ring-purple-100"
+                    disabled={isSubmitting}
+                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 pr-20 text-sm text-slate-900 outline-none transition focus:border-purple-500 focus:ring-2 focus:ring-purple-100 disabled:cursor-not-allowed disabled:bg-slate-100"
                   />
 
                   <button
@@ -291,11 +312,8 @@ function Login() {
                       ? 'Hide'
                       : 'Show'}
                   </button>
-
                 </div>
-
               </div>
-
 
               {/* Error */}
 
@@ -305,78 +323,26 @@ function Login() {
                 </div>
               )}
 
-
               {/* Submit */}
 
               <button
                 type="submit"
-                className="w-full rounded-xl bg-purple-600 px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2"
+                disabled={isSubmitting}
+                className="w-full rounded-xl bg-purple-600 px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Sign in
+                {isSubmitting
+                  ? 'Signing in...'
+                  : 'Sign in'}
               </button>
-
             </form>
 
-
-            {/* Demo Credentials */}
-
-            <div className="mt-8 rounded-xl border border-slate-200 bg-white p-4">
-
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Stage 1 Demo Accounts
-              </p>
-
-              <div className="mt-3 space-y-3 text-xs text-slate-600">
-
-                <div className="rounded-lg bg-slate-50 p-3">
-
-                  <p className="font-semibold text-slate-800">
-                    Employee
-                  </p>
-
-                  <p className="mt-1">
-                    employee@skillforge.com
-                  </p>
-
-                  <p>
-                    Password: employee123
-                  </p>
-
-                </div>
-
-                <div className="rounded-lg bg-slate-50 p-3">
-
-                  <p className="font-semibold text-slate-800">
-                    Admin
-                  </p>
-
-                  <p className="mt-1">
-                    admin@skillforge.com
-                  </p>
-
-                  <p>
-                    Password: admin123
-                  </p>
-
-                </div>
-
-              </div>
-
-            </div>
-
-
-            {/* Footer */}
-
             <p className="mt-8 text-center text-xs text-slate-400">
-              © 2026 SkillForge. All rights reserved.
+              © 2026 SkillForge. All rights
+              reserved.
             </p>
-
           </div>
-
         </div>
-
       </div>
-
     </div>
   )
 }

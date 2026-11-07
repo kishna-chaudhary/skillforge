@@ -1,6 +1,6 @@
 import {
+  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from 'react'
@@ -26,19 +26,57 @@ import {
   useSearchParams,
 } from 'react-router-dom'
 
-import {
-  io,
-} from 'socket.io-client'
+import { io } from 'socket.io-client'
 
 import DashboardLayout from '../../layouts/DashboardLayout'
-import { roadmapData } from '../../data/roadmapData'
 
-const socket = io(
-  'http://localhost:5000',
-  {
-    autoConnect: true,
+const API_URL = 'http://localhost:5000'
+
+const socket = io(API_URL, {
+  autoConnect: true,
+})
+
+type SessionStatus =
+  | 'draft'
+  | 'scheduled'
+  | 'live'
+  | 'ended'
+  | 'cancelled'
+
+interface LiveSession {
+  id: number
+  title: string
+  description: string
+  status: SessionStatus
+  scheduledDate: string
+  startTime: string
+  endTime: string
+  startedAt?: string | null
+  endedAt?: string | null
+
+  careerRole: {
+    id: number
+    slug: string
+    title: string
   }
-)
+
+  topic: {
+    id: number
+    slug: string
+    title: string
+  }
+
+  createdBy?: {
+    id: number
+    fullName: string
+  }
+}
+
+interface LiveSessionResponse {
+  success: boolean
+  session?: LiveSession
+  message?: string
+}
 
 interface ChatMessage {
   id: number
@@ -91,6 +129,10 @@ interface ChatPayload {
   time: string
 }
 
+interface SessionJoinErrorPayload {
+  message?: string
+}
+
 const rtcConfiguration: RTCConfiguration = {
   iceServers: [
     {
@@ -104,15 +146,17 @@ const rtcConfiguration: RTCConfiguration = {
 
 function LiveSessionRoom() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
 
-  const [searchParams] =
-    useSearchParams()
+  const sessionIdParam =
+    searchParams.get('sessionId')
 
-  const roleId =
-    searchParams.get('roleId')
+  const isAdminHost =
+    searchParams.get('host') === '1'
 
-  const topicId =
-    searchParams.get('topicId')
+  const sessionId = Number(
+    sessionIdParam
+  )
 
   const localVideoRef =
     useRef<HTMLVideoElement | null>(
@@ -143,45 +187,20 @@ function LiveSessionRoom() {
   const hasJoinedRef =
     useRef(false)
 
-  const session =
-    useMemo(() => {
-      if (!roleId || !topicId) {
-        return undefined
-      }
+  const [session, setSession] =
+    useState<LiveSession | null>(
+      null
+    )
 
-      const role =
-        roadmapData[roleId]
+  const [
+    isSessionLoading,
+    setIsSessionLoading,
+  ] = useState(true)
 
-      if (!role) {
-        return undefined
-      }
-
-      const topic =
-        role.topics.find(
-          (item) =>
-            item.id === topicId
-        )
-
-      if (!topic) {
-        return undefined
-      }
-
-      return {
-        roleId,
-        topicId,
-        roleTitle: role.title,
-        topicTitle: topic.title,
-        description:
-          topic.description,
-        sessionId:
-          `${roleId}-${topicId}-doubt-session`,
-        title:
-          `${topic.title} Doubt Solving Session`,
-      }
-    }, [
-      roleId,
-      topicId,
-    ])
+  const [
+    sessionError,
+    setSessionError,
+  ] = useState('')
 
   const [
     isMediaInitialized,
@@ -228,9 +247,161 @@ function LiveSessionRoom() {
   const [
     messages,
     setMessages,
-  ] = useState<
-    ChatMessage[]
-  >([])
+  ] = useState<ChatMessage[]>(
+    []
+  )
+
+  /*
+  |--------------------------------------------------------------------------
+  | NAVIGATION
+  |--------------------------------------------------------------------------
+  */
+
+  const goBack = useCallback(() => {
+    navigate(
+      isAdminHost
+        ? '/admin/live-sessions'
+        : '/employee/live-sessions'
+    )
+  }, [isAdminHost, navigate])
+
+  /*
+  |--------------------------------------------------------------------------
+  | LOAD SESSION FROM BACKEND
+  |--------------------------------------------------------------------------
+  */
+
+  useEffect(() => {
+    let mounted = true
+
+    const loadSession =
+      async () => {
+        setIsSessionLoading(true)
+        setSessionError('')
+
+        if (
+          !Number.isInteger(
+            sessionId
+          ) ||
+          sessionId <= 0
+        ) {
+          if (mounted) {
+            setSession(null)
+
+            setSessionError(
+              'Invalid live session.'
+            )
+
+            setIsSessionLoading(
+              false
+            )
+          }
+
+          return
+        }
+
+        try {
+          const token =
+            localStorage.getItem(
+              'skillforge-token'
+            )
+
+          if (!token) {
+            throw new Error(
+              'Your login session was not found. Please sign in again.'
+            )
+          }
+
+          const response =
+            await fetch(
+              `${API_URL}/api/live-sessions/${sessionId}`,
+              {
+                headers: {
+                  Authorization:
+                    `Bearer ${token}`,
+                },
+              }
+            )
+
+          const data =
+            (await response.json()) as LiveSessionResponse
+
+          if (
+            !response.ok ||
+            !data.success ||
+            !data.session
+          ) {
+            throw new Error(
+              data.message ||
+                'Live session was not found.'
+            )
+          }
+
+          if (
+            data.session.status !==
+            'live'
+          ) {
+            if (!mounted) {
+              return
+            }
+
+            setSession(null)
+
+            if (
+              data.session.status ===
+              'ended'
+            ) {
+              setSessionError(
+                'This live session has ended.'
+              )
+            } else if (
+              data.session.status ===
+              'cancelled'
+            ) {
+              setSessionError(
+                'This live session has been cancelled.'
+              )
+            } else {
+              setSessionError(
+                'This session has not been started by Admin yet.'
+              )
+            }
+
+            return
+          }
+
+          if (mounted) {
+            setSession(
+              data.session
+            )
+          }
+        } catch (error) {
+          if (!mounted) {
+            return
+          }
+
+          setSession(null)
+
+          setSessionError(
+            error instanceof Error
+              ? error.message
+              : 'Unable to load live session.'
+          )
+        } finally {
+          if (mounted) {
+            setIsSessionLoading(
+              false
+            )
+          }
+        }
+      }
+
+    void loadSession()
+
+    return () => {
+      mounted = false
+    }
+  }, [sessionId])
 
   /*
   |--------------------------------------------------------------------------
@@ -250,7 +421,7 @@ function LiveSessionRoom() {
         name:
           'SkillForge Instructor',
         text:
-          `Welcome to the ${session.topicTitle} doubt solving session. Ask questions about concepts, practical problems, lessons, or assessment preparation.`,
+          `Welcome to the ${session.topic.title} doubt solving session. Ask questions about concepts, practical problems, lessons, or assessment preparation.`,
         time:
           'Session started',
         own: false,
@@ -260,27 +431,34 @@ function LiveSessionRoom() {
 
   /*
   |--------------------------------------------------------------------------
-  | GET LOCAL CAMERA + MICROPHONE
+  | LOCAL CAMERA + MICROPHONE
   |--------------------------------------------------------------------------
   */
 
   useEffect(() => {
+    if (!session) {
+      return
+    }
+
     let mounted = true
 
     const initializeMedia =
       async () => {
         try {
           const stream =
-            await navigator.mediaDevices.getUserMedia(
-              {
+            await navigator
+              .mediaDevices
+              .getUserMedia({
                 video: true,
                 audio: {
-                  echoCancellation: true,
-                  noiseSuppression: true,
-                  autoGainControl: true,
+                  echoCancellation:
+                    true,
+                  noiseSuppression:
+                    true,
+                  autoGainControl:
+                    true,
                 },
-              }
-            )
+              })
 
           if (!mounted) {
             stream
@@ -342,86 +520,93 @@ function LiveSessionRoom() {
     return () => {
       mounted = false
     }
-  }, [])
+  }, [session])
 
   /*
   |--------------------------------------------------------------------------
-  | REMOTE STREAM
+  | REMOTE STREAM HELPERS
   |--------------------------------------------------------------------------
   */
 
   const addRemoteStream =
-    (
-      socketId: string,
-      stream: MediaStream
-    ) => {
-      setRemoteParticipants(
-        (current) => {
-          const exists =
-            current.some(
-              (participant) =>
-                participant.socketId ===
-                socketId
-            )
+    useCallback(
+      (
+        socketId: string,
+        stream: MediaStream
+      ) => {
+        setRemoteParticipants(
+          (current) => {
+            const exists =
+              current.some(
+                (participant) =>
+                  participant.socketId ===
+                  socketId
+              )
 
-          if (exists) {
-            return current.map(
-              (participant) =>
-                participant.socketId ===
-                socketId
-                  ? {
-                      socketId,
-                      stream,
-                    }
-                  : participant
-            )
+            if (exists) {
+              return current.map(
+                (
+                  participant
+                ) =>
+                  participant.socketId ===
+                  socketId
+                    ? {
+                        socketId,
+                        stream,
+                      }
+                    : participant
+              )
+            }
+
+            return [
+              ...current,
+              {
+                socketId,
+                stream,
+              },
+            ]
           }
-
-          return [
-            ...current,
-            {
-              socketId,
-              stream,
-            },
-          ]
-        }
-      )
-    }
+        )
+      },
+      []
+    )
 
   const removePeer =
-    (socketId: string) => {
-      const peer =
-        peerConnectionsRef.current.get(
-          socketId
-        )
-
-      if (peer) {
-        peer.onicecandidate =
-          null
-
-        peer.ontrack =
-          null
-
-        peer.close()
-
-        peerConnectionsRef.current.delete(
-          socketId
-        )
-      }
-
-      pendingIceRef.current.delete(
-        socketId
-      )
-
-      setRemoteParticipants(
-        (current) =>
-          current.filter(
-            (participant) =>
-              participant.socketId !==
-              socketId
+    useCallback(
+      (socketId: string) => {
+        const peer =
+          peerConnectionsRef.current.get(
+            socketId
           )
-      )
-    }
+
+        if (peer) {
+          peer.onicecandidate =
+            null
+
+          peer.ontrack = null
+
+          peer.close()
+
+          peerConnectionsRef.current.delete(
+            socketId
+          )
+        }
+
+        pendingIceRef.current.delete(
+          socketId
+        )
+
+        setRemoteParticipants(
+          (current) =>
+            current.filter(
+              (participant) =>
+                participant.socketId !==
+                socketId
+            )
+        )
+      },
+      []
+    )
 
   /*
   |--------------------------------------------------------------------------
@@ -430,132 +615,137 @@ function LiveSessionRoom() {
   */
 
   const createPeerConnection =
-    (remoteSocketId: string) => {
-      const existing =
-        peerConnectionsRef.current.get(
-          remoteSocketId
-        )
-
-      if (existing) {
-        return existing
-      }
-
-      const peer =
-        new RTCPeerConnection(
-          rtcConfiguration
-        )
-
-      peerConnectionsRef.current.set(
-        remoteSocketId,
-        peer
-      )
-
-      /*
-       * Send our camera + microphone tracks
-       * to the remote browser.
-       */
-      const localStream =
-        localStreamRef.current
-
-      if (localStream) {
-        localStream
-          .getTracks()
-          .forEach(
-            (track) => {
-              peer.addTrack(
-                track,
-                localStream
-              )
-            }
-          )
-      }
-
-      /*
-       * Receive remote camera + microphone.
-       */
-      peer.ontrack = (
-        event
+    useCallback(
+      (
+        remoteSocketId: string
       ) => {
-        const stream =
-          event.streams[0]
-
-        if (stream) {
-          addRemoteStream(
-            remoteSocketId,
-            stream
+        const existing =
+          peerConnectionsRef.current.get(
+            remoteSocketId
           )
-        }
-      }
 
-      /*
-       * Send ICE networking information
-       * through Socket.IO.
-       */
-      peer.onicecandidate =
-        (event) => {
-          if (!event.candidate) {
-            return
-          }
-
-          socket.emit(
-            'ice-candidate',
-            {
-              target:
-                remoteSocketId,
-              candidate:
-                event.candidate.toJSON(),
-            }
-          )
+        if (existing) {
+          return existing
         }
 
-      peer.onconnectionstatechange =
-        () => {
-          if (
-            peer.connectionState ===
-              'failed' ||
-            peer.connectionState ===
-              'closed'
-          ) {
-            removePeer(
-              remoteSocketId
+        const peer =
+          new RTCPeerConnection(
+            rtcConfiguration
+          )
+
+        peerConnectionsRef.current.set(
+          remoteSocketId,
+          peer
+        )
+
+        const localStream =
+          localStreamRef.current
+
+        if (localStream) {
+          localStream
+            .getTracks()
+            .forEach(
+              (track) => {
+                peer.addTrack(
+                  track,
+                  localStream
+                )
+              }
+            )
+        }
+
+        peer.ontrack = (
+          event
+        ) => {
+          const stream =
+            event.streams[0]
+
+          if (stream) {
+            addRemoteStream(
+              remoteSocketId,
+              stream
             )
           }
         }
 
-      return peer
-    }
+        peer.onicecandidate =
+          (event) => {
+            if (
+              !event.candidate
+            ) {
+              return
+            }
+
+            socket.emit(
+              'ice-candidate',
+              {
+                target:
+                  remoteSocketId,
+                candidate:
+                  event.candidate.toJSON(),
+              }
+            )
+          }
+
+        peer.onconnectionstatechange =
+          () => {
+            if (
+              peer.connectionState ===
+                'failed' ||
+              peer.connectionState ===
+                'closed'
+            ) {
+              removePeer(
+                remoteSocketId
+              )
+            }
+          }
+
+        return peer
+      },
+      [
+        addRemoteStream,
+        removePeer,
+      ]
+    )
 
   /*
   |--------------------------------------------------------------------------
-  | PROCESS QUEUED ICE
+  | PENDING ICE
   |--------------------------------------------------------------------------
   */
 
   const flushPendingIce =
-    async (
-      socketId: string,
-      peer:
-        RTCPeerConnection
-    ) => {
-      const candidates =
-        pendingIceRef.current.get(
-          socketId
-        ) || []
+    useCallback(
+      async (
+        socketId: string,
+        peer:
+          RTCPeerConnection
+      ) => {
+        const candidates =
+          pendingIceRef.current.get(
+            socketId
+          ) || []
 
-      for (const candidate of candidates) {
-        try {
-          await peer.addIceCandidate(
-            candidate
-          )
-        } catch {
-          // Ignore an invalid/stale candidate.
+        for (
+          const candidate of
+          candidates
+        ) {
+          try {
+            await peer.addIceCandidate(
+              candidate
+            )
+          } catch {
+            // Ignore stale ICE candidates.
+          }
         }
-      }
 
-      pendingIceRef.current.delete(
-        socketId
-      )
-    }
+        pendingIceRef.current.delete(
+          socketId
+        )
+      },
+      []
+    )
 
   /*
   |--------------------------------------------------------------------------
@@ -564,41 +754,44 @@ function LiveSessionRoom() {
   */
 
   const createOffer =
-    async (
-      remoteSocketId: string
-    ) => {
-      const peer =
-        createPeerConnection(
-          remoteSocketId
-        )
+    useCallback(
+      async (
+        remoteSocketId: string
+      ) => {
+        const peer =
+          createPeerConnection(
+            remoteSocketId
+          )
 
-      try {
-        const offer =
-          await peer.createOffer()
+        try {
+          const offer =
+            await peer.createOffer()
 
-        await peer.setLocalDescription(
-          offer
-        )
+          await peer.setLocalDescription(
+            offer
+          )
 
-        socket.emit(
-          'offer',
-          {
-            target:
-              remoteSocketId,
-            offer,
-          }
-        )
-      } catch (error) {
-        console.error(
-          'Unable to create WebRTC offer:',
-          error
-        )
-      }
-    }
+          socket.emit(
+            'offer',
+            {
+              target:
+                remoteSocketId,
+              offer,
+            }
+          )
+        } catch (error) {
+          console.error(
+            'Unable to create WebRTC offer:',
+            error
+          )
+        }
+      },
+      [createPeerConnection]
+    )
 
   /*
   |--------------------------------------------------------------------------
-  | SOCKET + WEBRTC SIGNALING
+  | SOCKET.IO + WEBRTC SIGNALING
   |--------------------------------------------------------------------------
   */
 
@@ -630,15 +823,11 @@ function LiveSessionRoom() {
 
     const handleUserJoined =
       ({
-        socketId,
+        socketId:
+          joinedSocketId,
       }: UserJoinedPayload) => {
-        /*
-         * The newly joined user creates
-         * the offer, so existing users
-         * only prepare a peer connection.
-         */
         createPeerConnection(
-          socketId
+          joinedSocketId
         )
       }
 
@@ -772,10 +961,11 @@ function LiveSessionRoom() {
 
     const handleUserLeft =
       ({
-        socketId,
+        socketId:
+          leftSocketId,
       }: UserLeftPayload) => {
         removePeer(
-          socketId
+          leftSocketId
         )
       }
 
@@ -808,6 +998,34 @@ function LiveSessionRoom() {
             },
           ]
         )
+      }
+
+    const handleJoinError =
+      (
+        payload:
+          | SessionJoinErrorPayload
+          | string
+      ) => {
+        const errorMessage =
+          typeof payload ===
+          'string'
+            ? payload
+            : payload?.message
+
+        setSessionError(
+          errorMessage ||
+            'Unable to join this live session.'
+        )
+
+        hasJoinedRef.current =
+          false
+
+        localStreamRef.current
+          ?.getTracks()
+          .forEach(
+            (track) =>
+              track.stop()
+          )
       }
 
     socket.on(
@@ -850,12 +1068,17 @@ function LiveSessionRoom() {
       handleChatMessage
     )
 
+    socket.on(
+      'session-join-error',
+      handleJoinError
+    )
+
     if (
       !hasJoinedRef.current
     ) {
       socket.emit(
         'join-session',
-        session.sessionId
+        session.id
       )
 
       hasJoinedRef.current =
@@ -902,10 +1125,19 @@ function LiveSessionRoom() {
         'chat-message',
         handleChatMessage
       )
+
+      socket.off(
+        'session-join-error',
+        handleJoinError
+      )
     }
   }, [
     session,
     isMediaInitialized,
+    createOffer,
+    createPeerConnection,
+    flushPendingIce,
+    removePeer,
   ])
 
   /*
@@ -922,7 +1154,7 @@ function LiveSessionRoom() {
       ) {
         socket.emit(
           'leave-session',
-          session.sessionId
+          session.id
         )
       }
 
@@ -1038,7 +1270,8 @@ function LiveSessionRoom() {
 
       if (
         !trimmed ||
-        !session
+        !session ||
+        !hasJoinedRef.current
       ) {
         return
       }
@@ -1047,11 +1280,13 @@ function LiveSessionRoom() {
         'chat-message',
         {
           sessionId:
-            session.sessionId,
+            session.id,
           message:
             trimmed,
           name:
-            'Participant',
+            isAdminHost
+              ? 'Instructor'
+              : 'Participant',
         }
       )
 
@@ -1073,7 +1308,7 @@ function LiveSessionRoom() {
 
   /*
   |--------------------------------------------------------------------------
-  | LEAVE
+  | LEAVE SESSION
   |--------------------------------------------------------------------------
   */
 
@@ -1085,7 +1320,7 @@ function LiveSessionRoom() {
       ) {
         socket.emit(
           'leave-session',
-          session.sessionId
+          session.id
         )
 
         hasJoinedRef.current =
@@ -1098,6 +1333,7 @@ function LiveSessionRoom() {
       )
 
       peerConnectionsRef.current.clear()
+      pendingIceRef.current.clear()
 
       if (
         localStreamRef.current
@@ -1108,22 +1344,57 @@ function LiveSessionRoom() {
             (track) =>
               track.stop()
           )
+
+        localStreamRef.current =
+          null
       }
 
-      navigate(
-        '/employee/live-sessions'
-      )
+      goBack()
     }
 
-  if (!session) {
+  /*
+  |--------------------------------------------------------------------------
+  | LOADING
+  |--------------------------------------------------------------------------
+  */
+
+  if (isSessionLoading) {
     return (
       <DashboardLayout>
         <div className="min-h-screen bg-slate-50 p-6">
-
           <div className="mx-auto max-w-3xl">
-
             <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+              <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-purple-600" />
 
+              <h1 className="mt-5 text-xl font-bold text-slate-900">
+                Joining Live Session
+              </h1>
+
+              <p className="mt-2 text-sm text-slate-500">
+                Checking the session status...
+              </p>
+            </div>
+          </div>
+        </div>
+      </DashboardLayout>
+    )
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | SESSION ERROR
+  |--------------------------------------------------------------------------
+  */
+
+  if (
+    sessionError ||
+    !session
+  ) {
+    return (
+      <DashboardLayout>
+        <div className="min-h-screen bg-slate-50 p-6">
+          <div className="mx-auto max-w-3xl">
+            <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center shadow-sm">
               <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-purple-100 text-purple-600">
                 <CircleHelp
                   size={26}
@@ -1131,20 +1402,17 @@ function LiveSessionRoom() {
               </div>
 
               <h1 className="mt-5 text-2xl font-bold text-slate-900">
-                Session Not Found
+                Session Unavailable
               </h1>
 
               <p className="mt-2 text-sm text-slate-500">
-                Choose a valid roadmap topic
-                from Live Sessions.
+                {sessionError ||
+                  'This live session could not be found.'}
               </p>
 
               <button
-                onClick={() =>
-                  navigate(
-                    '/employee/live-sessions'
-                  )
-                }
+                type="button"
+                onClick={goBack}
                 className="mt-6 inline-flex items-center gap-2 rounded-xl bg-purple-600 px-5 py-3 text-sm font-semibold text-white hover:bg-purple-700"
               >
                 <ArrowLeft
@@ -1153,33 +1421,34 @@ function LiveSessionRoom() {
 
                 Back to Sessions
               </button>
-
             </div>
-
           </div>
-
         </div>
       </DashboardLayout>
     )
   }
 
+  /*
+  |--------------------------------------------------------------------------
+  | LIVE ROOM
+  |--------------------------------------------------------------------------
+  */
+
   return (
     <DashboardLayout>
       <div className="min-h-screen bg-slate-950 text-white">
-
         <div className="mx-auto max-w-7xl p-5 lg:p-6">
-
           {/* HEADER */}
 
           <div className="mb-5 flex flex-col gap-4 rounded-2xl border border-slate-800 bg-slate-900 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
-
             <div className="flex items-start gap-4">
-
               <button
+                type="button"
                 onClick={
                   leaveSession
                 }
                 className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-white"
+                aria-label="Leave session"
               >
                 <ArrowLeft
                   size={19}
@@ -1187,11 +1456,10 @@ function LiveSessionRoom() {
               </button>
 
               <div>
-
                 <div className="flex flex-wrap items-center gap-2">
-
                   <span className="rounded-full bg-purple-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-purple-300">
-                    Doubt Solving Session
+                    Doubt Solving
+                    Session
                   </span>
 
                   <span className="flex items-center gap-1.5 rounded-full bg-green-500/10 px-2.5 py-1 text-[10px] font-semibold text-green-400">
@@ -1199,6 +1467,11 @@ function LiveSessionRoom() {
                     Live
                   </span>
 
+                  {isAdminHost && (
+                    <span className="rounded-full bg-blue-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-blue-300">
+                      Host
+                    </span>
+                  )}
                 </div>
 
                 <h1 className="mt-2 text-xl font-bold">
@@ -1206,15 +1479,16 @@ function LiveSessionRoom() {
                 </h1>
 
                 <p className="mt-1 text-sm text-slate-400">
-                  {session.roleTitle}
+                  {
+                    session
+                      .careerRole
+                      .title
+                  }
                 </p>
-
               </div>
-
             </div>
 
             <div className="flex flex-wrap gap-3">
-
               <div className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs text-slate-300">
                 <Users
                   size={15}
@@ -1234,11 +1508,10 @@ function LiveSessionRoom() {
                   className="text-green-400"
                 />
 
-                Instructor moderated
+                Instructor
+                moderated
               </div>
-
             </div>
-
           </div>
 
           {/* VIDEO GRID */}
@@ -1251,11 +1524,12 @@ function LiveSessionRoom() {
                 : 'grid-cols-1'
             }`}
           >
-
-            {/* LOCAL */}
-
             <VideoTile
-              label="You"
+              label={
+                isAdminHost
+                  ? 'You (Host)'
+                  : 'You'
+              }
               videoRef={
                 localVideoRef
               }
@@ -1264,8 +1538,6 @@ function LiveSessionRoom() {
               }
               muted
             />
-
-            {/* REMOTE USERS */}
 
             {remoteParticipants.map(
               (
@@ -1285,14 +1557,14 @@ function LiveSessionRoom() {
                 />
               )
             )}
-
           </div>
 
           {remoteParticipants.length ===
             0 && (
             <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900 px-4 py-3 text-center text-sm text-slate-400">
-              Waiting for another participant
-              to join the doubt solving
+              Waiting for another
+              participant to join
+              the doubt solving
               session...
             </div>
           )}
@@ -1306,8 +1578,8 @@ function LiveSessionRoom() {
           {/* CONTROLS */}
 
           <div className="mt-5 flex justify-center gap-3">
-
             <button
+              type="button"
               onClick={
                 toggleMicrophone
               }
@@ -1316,9 +1588,16 @@ function LiveSessionRoom() {
                   ? 'bg-slate-800 hover:bg-slate-700'
                   : 'bg-red-600 hover:bg-red-700'
               }`}
+              aria-label={
+                isMicOn
+                  ? 'Mute microphone'
+                  : 'Unmute microphone'
+              }
             >
               {isMicOn ? (
-                <Mic size={20} />
+                <Mic
+                  size={20}
+                />
               ) : (
                 <MicOff
                   size={20}
@@ -1327,6 +1606,7 @@ function LiveSessionRoom() {
             </button>
 
             <button
+              type="button"
               onClick={
                 toggleCamera
               }
@@ -1335,9 +1615,16 @@ function LiveSessionRoom() {
                   ? 'bg-slate-800 hover:bg-slate-700'
                   : 'bg-red-600 hover:bg-red-700'
               }`}
+              aria-label={
+                isCameraOn
+                  ? 'Turn camera off'
+                  : 'Turn camera on'
+              }
             >
               {isCameraOn ? (
-                <Video size={20} />
+                <Video
+                  size={20}
+                />
               ) : (
                 <VideoOff
                   size={20}
@@ -1346,12 +1633,14 @@ function LiveSessionRoom() {
             </button>
 
             <button
+              type="button"
               onClick={() =>
                 setIsChatOpen(
                   true
                 )
               }
               className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700"
+              aria-label="Open chat"
             >
               <MessageSquare
                 size={20}
@@ -1359,26 +1648,25 @@ function LiveSessionRoom() {
             </button>
 
             <button
+              type="button"
               onClick={
                 leaveSession
               }
               className="flex h-12 w-12 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"
+              aria-label="Leave session"
+              title="Leave Session"
             >
               <PhoneOff
                 size={20}
               />
             </button>
-
           </div>
 
           {/* SESSION INFORMATION */}
 
           <div className="mt-6 grid grid-cols-1 gap-5 lg:grid-cols-2">
-
             <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-
               <div className="flex gap-4">
-
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-purple-500/10 text-purple-300">
                   <CircleHelp
                     size={21}
@@ -1386,41 +1674,42 @@ function LiveSessionRoom() {
                 </div>
 
                 <div>
-
                   <p className="text-xs font-semibold uppercase tracking-wider text-purple-400">
                     Session Purpose
                   </p>
 
                   <h2 className="mt-1 font-bold">
-                    Ask questions about{' '}
-                    {session.topicTitle}
+                    Ask questions
+                    about{' '}
+                    {
+                      session
+                        .topic
+                        .title
+                    }
                   </h2>
 
                   <p className="mt-2 text-sm leading-6 text-slate-400">
-                    Clarify lesson concepts,
-                    implementation problems,
-                    practical exercises and
-                    assessment preparation.
+                    {session.description ||
+                      'Clarify lesson concepts, implementation problems, practical exercises and assessment preparation.'}
                   </p>
-
                 </div>
-
               </div>
-
             </div>
 
             <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                 Career Roadmap
               </p>
 
               <h2 className="mt-2 font-bold">
-                {session.roleTitle}
+                {
+                  session
+                    .careerRole
+                    .title
+                }
               </h2>
 
               <div className="mt-4 flex items-center gap-3 rounded-xl bg-slate-800 p-4">
-
                 <BookOpen
                   size={18}
                   className="text-purple-400"
@@ -1432,26 +1721,26 @@ function LiveSessionRoom() {
                   </p>
 
                   <p className="text-sm font-semibold">
-                    {session.topicTitle}
+                    {
+                      session
+                        .topic
+                        .title
+                    }
                   </p>
                 </div>
-
               </div>
-
             </div>
-
           </div>
 
           {/* CHAT */}
 
           {isChatOpen && (
             <div className="fixed bottom-6 right-6 z-50 flex h-[520px] w-[360px] max-w-[calc(100vw-3rem)] flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl">
-
               <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
-
                 <div>
                   <h2 className="font-semibold">
-                    Doubt Session Chat
+                    Doubt Session
+                    Chat
                   </h2>
 
                   <p className="text-xs text-slate-400">
@@ -1461,20 +1750,20 @@ function LiveSessionRoom() {
                 </div>
 
                 <button
+                  type="button"
                   onClick={() =>
                     setIsChatOpen(
                       false
                     )
                   }
                   className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-white"
+                  aria-label="Close chat"
                 >
                   <X size={18} />
                 </button>
-
               </div>
 
               <div className="flex-1 space-y-4 overflow-y-auto p-4">
-
                 {messages.map(
                   (
                     chatMessage
@@ -1489,7 +1778,6 @@ function LiveSessionRoom() {
                           : 'justify-start'
                       }`}
                     >
-
                       <div
                         className={`max-w-[85%] rounded-xl px-3 py-2 ${
                           chatMessage.own
@@ -1497,7 +1785,6 @@ function LiveSessionRoom() {
                             : 'bg-slate-800'
                         }`}
                       >
-
                         {!chatMessage.own && (
                           <p className="mb-1 text-xs font-semibold text-purple-400">
                             {
@@ -1517,19 +1804,14 @@ function LiveSessionRoom() {
                             chatMessage.time
                           }
                         </p>
-
                       </div>
-
                     </div>
                   )
                 )}
-
               </div>
 
               <div className="border-t border-slate-700 p-3">
-
                 <div className="flex gap-2">
-
                   <input
                     value={
                       message
@@ -1538,7 +1820,8 @@ function LiveSessionRoom() {
                       event
                     ) =>
                       setMessage(
-                        event.target
+                        event
+                          .target
                           .value
                       )
                     }
@@ -1550,6 +1833,7 @@ function LiveSessionRoom() {
                   />
 
                   <button
+                    type="button"
                     onClick={
                       sendMessage
                     }
@@ -1557,29 +1841,34 @@ function LiveSessionRoom() {
                       !message.trim()
                     }
                     className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-600 disabled:opacity-50"
+                    aria-label="Send message"
                   >
                     <Send
                       size={17}
                     />
                   </button>
-
                 </div>
-
               </div>
-
             </div>
           )}
-
         </div>
       </div>
     </DashboardLayout>
   )
 }
 
+/*
+|--------------------------------------------------------------------------
+| LOCAL VIDEO
+|--------------------------------------------------------------------------
+*/
+
 interface VideoTileProps {
   label: string
+
   videoRef:
     React.RefObject<HTMLVideoElement | null>
+
   cameraEnabled: boolean
   muted?: boolean
 }
@@ -1592,9 +1881,7 @@ function VideoTile({
 }: VideoTileProps) {
   return (
     <div className="relative overflow-hidden rounded-3xl border border-slate-800 bg-black">
-
       <div className="aspect-video">
-
         <video
           ref={videoRef}
           autoPlay
@@ -1609,9 +1896,7 @@ function VideoTile({
 
         {!cameraEnabled && (
           <div className="absolute inset-0 flex items-center justify-center bg-slate-900">
-
             <div className="text-center">
-
               <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-purple-600 text-xl font-bold">
                 {label.charAt(0)}
               </div>
@@ -1619,25 +1904,28 @@ function VideoTile({
               <p className="mt-3 text-sm">
                 Camera off
               </p>
-
             </div>
-
           </div>
         )}
-
       </div>
 
       <span className="absolute bottom-4 left-4 rounded-lg bg-black/60 px-3 py-1.5 text-xs">
         {label}
       </span>
-
     </div>
   )
 }
 
+/*
+|--------------------------------------------------------------------------
+| REMOTE VIDEO
+|--------------------------------------------------------------------------
+*/
+
 interface RemoteVideoTileProps {
   participant:
     RemoteParticipant
+
   label: string
 }
 
@@ -1669,22 +1957,18 @@ function RemoteVideoTile({
 
   return (
     <div className="relative overflow-hidden rounded-3xl border border-slate-800 bg-black">
-
       <div className="aspect-video">
-
         <video
           ref={videoRef}
           autoPlay
           playsInline
           className="h-full w-full object-cover"
         />
-
       </div>
 
       <span className="absolute bottom-4 left-4 rounded-lg bg-black/60 px-3 py-1.5 text-xs">
         {label}
       </span>
-
     </div>
   )
 }

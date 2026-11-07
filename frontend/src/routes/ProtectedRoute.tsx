@@ -1,12 +1,20 @@
-import type { ReactNode } from 'react'
+import type {
+  ReactNode,
+} from 'react'
 import {
   Navigate,
   useLocation,
 } from 'react-router-dom'
 
+import {
+  useAuth,
+} from '../context/AuthContext'
+
 interface ProtectedRouteProps {
   children: ReactNode
-  requiredRole?: 'employee' | 'admin'
+  requiredRole?:
+    | 'employee'
+    | 'admin'
 }
 
 function ProtectedRoute({
@@ -15,21 +23,38 @@ function ProtectedRoute({
 }: ProtectedRouteProps) {
   const location = useLocation()
 
-  const isAuthenticated =
-    localStorage.getItem(
-      'skillforge-auth'
-    ) === 'true'
+  const {
+    user,
+    isAuthenticated,
+    isLoading,
+  } = useAuth()
 
-  const userRole =
-    localStorage.getItem(
-      'skillforge-role'
+  // ----------------------------------------------
+  // Session is being validated with /api/auth/me
+  // ----------------------------------------------
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="text-center">
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-purple-600" />
+
+          <p className="mt-4 text-sm text-slate-500">
+            Loading SkillForge...
+          </p>
+        </div>
+      </div>
     )
+  }
 
   // ----------------------------------------------
-  // Not logged in
+  // Not authenticated
   // ----------------------------------------------
 
-  if (!isAuthenticated) {
+  if (
+    !isAuthenticated ||
+    !user
+  ) {
     return (
       <Navigate
         to="/login"
@@ -47,9 +72,9 @@ function ProtectedRoute({
 
   if (
     requiredRole &&
-    userRole !== requiredRole
+    user.role !== requiredRole
   ) {
-    if (userRole === 'admin') {
+    if (user.role === 'admin') {
       return (
         <Navigate
           to="/admin/dashboard"
